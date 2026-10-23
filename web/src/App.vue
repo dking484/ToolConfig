@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { firmwareRestart, homed, isPrinting, printState, state, status, tc, tryRun } from './store'
 import RecoveryBanner from './components/RecoveryBanner.vue'
+import PrepBar from './components/PrepBar.vue'
 import ToolsView from './components/ToolsView.vue'
 import DockView from './components/DockView.vue'
 import SlicerView from './components/SlicerView.vue'
@@ -45,8 +46,8 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
       <span v-if="printState !== 'standby'" class="pill info"><span class="dot" />{{ printState }}</span>
       <span v-if="state.busy" class="pill info"><span class="dot" />Running: {{ state.busy.slice(0, 40) }}</span>
       <template v-if="state.klippy === 'ready'">
-        <button class="small" :disabled="!!state.busy || isPrinting" title="G28: home all axes (heats the nozzle to probe temperature for Z)" @click="tryRun('G28', 'Home all')">Home</button>
-        <button class="small" :disabled="!!state.busy || isPrinting || homed !== 'xyz'" title="QUAD_GANTRY_LEVEL, then re-home Z" @click="tryRun('QUAD_GANTRY_LEVEL\nG28 Z', 'QGL + home Z')">QGL</button>
+        <button :disabled="!!state.busy || isPrinting" title="G28: home all axes (heats the nozzle to probe temperature for Z)" @click="tryRun('G28', 'Home all')">Home all</button>
+        <button :disabled="!!state.busy || isPrinting || homed !== 'xyz'" :title="homed !== 'xyz' ? 'Home first' : 'QUAD_GANTRY_LEVEL, then re-home Z'" @click="tryRun('QUAD_GANTRY_LEVEL\nG28 Z', 'QGL + home Z')">Quad gantry level</button>
       </template>
       <a class="btn small" href="/">Mainsail</a>
     </div>
@@ -60,6 +61,7 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
     </div>
 
     <RecoveryBanner />
+    <PrepBar v-if="tab === 'tools' || tab === 'dock'" />
 
     <div v-if="state.pendingRestart.length" class="callout warn row">
       <div class="grow">

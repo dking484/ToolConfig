@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { homed, isPrinting, state, tc, tools, tryRun } from '../store'
+import { isPrinting, state, tc, tools, tryRun } from '../store'
 import type { ToolInfo } from '../lib/tools'
 import ToolCard from './ToolCard.vue'
 import ToolEditor from './ToolEditor.vue'
@@ -24,7 +24,6 @@ function dock(t: ToolInfo) {
       <button :disabled="!!state.busy" title="Read every tool probe to see which tool is on the carriage" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
       <button :disabled="!!state.busy || isPrinting" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
     </div>
-    <p v-if="homed !== 'xyz'" class="muted note">Home the printer to enable tool selection and dock tests. Viewing and editing settings works without homing.</p>
     <div class="cards">
       <ToolCard v-for="t in tools" :key="t.name" :tool="t" @select="select(t)" @edit="editing = t" @dock="dock(t)" />
     </div>
@@ -34,5 +33,4 @@ function dock(t: ToolInfo) {
 
 <style scoped>
 .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
-.note { margin: -4px 0 0; }
 </style>

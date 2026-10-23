@@ -26,7 +26,8 @@ const checks = computed(() => {
   const hot = (t?.temp ?? 0) > 150
   return [
     { ok: !!safety.value, label: 'Safe-failure macros loaded (no M112 on a failed pickup)' },
-    { ok: homed.value === 'xyz', label: 'Printer homed (G28)' },
+    { ok: homed.value === 'xyz', label: 'Printer homed (use Home all above)' },
+    { ok: !!status.value.quad_gantry_level?.applied, label: 'Gantry levelled (use Quad gantry level above)' },
     { ok: ['ready', 'changing'].includes(tc.value.status), label: `Toolchanger ready (now: ${tc.value.status})` },
     { ok: !!t && t.warnings.length === 0, label: t?.warnings.length ? t.warnings.join('; ') : `${t?.label} dock position looks sane` },
     { ok: !hot, label: hot ? `${t?.label} nozzle is ${t?.temp?.toFixed(0)}°C. Probing tools refuse to work above 150°C` : 'Nozzle cool enough' },
