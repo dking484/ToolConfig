@@ -15,7 +15,7 @@ const props = defineProps<{ toolNumber: number }>()
 
 type Step =
   | 'check' | 'start' | 'fit' | 'adjust' | 'test' | 'failed' | 'mount' | 'verifyfix' | 'save' | 'done'
-  | 'secure' | 'hold' | 'pc-prep' | 'pc-short' | 'pc-latch' | 'pc-free' | 'pc-freed' | 'pc-align' | 'pc-up' | 'pc-done'
+  | 'secure' | 'hold' | 'pc-prep' | 'pc-short' | 'pc-latch' | 'pc-free' | 'pc-freed' | 'pc-align' | 'pc-up' | 'pc-done' | 'pc-missed'
 type Axis = 'X' | 'Y' | 'Z'
 interface Option { label: string; desc: string; value: string }
 
@@ -193,7 +193,10 @@ async function dropOff() {
 }
 async function pcStart() {
   moved.value = { X: 0, Y: 0, Z: 0 }
-  await act(() => run(`TC_PICKUP_CHECK_START T=${n.value}`, `Empty carriage under ${label.value}`), 'pc-short')
+  await act(async () => {
+    await run(`TC_PICKUP_CHECK_START T=${n.value}`, `Empty carriage under ${label.value}`)
+    await settle() // let the 'changing' status arrive before showing the question
+  }, 'pc-short')
 }
 async function pcGoto(z: number, next: Step) {
   await act(() => run(`TC_ALIGN_GOTO T=${n.value} Z=${z.toFixed(3)}`, `Z to ${z.toFixed(2)}`), next)
@@ -222,16 +225,38 @@ function answerFreed(v: string) {
   else step.value = 'pc-free'
 }
 async function pcFinish() {
-  await act(async () => {
+  busy.value = true
+  error.value = ''
+  try {
     await run(`TC_PICKUP_CHECK_FINISH T=${n.value}`, `Finish pickup of ${label.value}`)
     const open = await detectTools()
     if (!(open.length === 1 && open[0] === n.value)) {
-      throw new Error(`${label.value} was not detected on the carriage after leaving the dock (probes open: ${open.map((x) => 'T' + x).join(', ') || 'none'}). If it is hanging on the carriage, hold it.`)
+      // Left the dock without the tool: ask where it is instead of leaving a dead end
+      step.value = 'pc-missed'
+      return
     }
     const live = { ...status.value[tool.value!.name] }
     note.value = await savePark(live.params_park_x, live.params_park_y, live.params_park_z)
-  }, 'pc-done')
+    step.value = 'pc-done'
+  } catch (e: any) {
+    error.value = e.message
+  } finally {
+    busy.value = false
+  }
 }
+async function answerMissed(v: string) {
+  if (v === 'seated') {
+    // Start over from the position just found (it is live on the tool)
+    await act(async () => {
+      await run('TC_RECOVER', 'Re-detect')
+    }, 'pc-prep')
+  } else if (v === 'hanging') step.value = 'hold'
+  else step.value = 'secure'
+}
+// Pickup-check steps only work while Klipper is still in docking mode
+const pcActive = computed(() => tc.value.status === 'changing' && !tool.value?.active)
+const PC_STEPS: Step[] = ['pc-short', 'pc-latch', 'pc-align', 'pc-up', 'pc-free', 'pc-freed']
+const pcLost = computed(() => PC_STEPS.includes(step.value) && !pcActive.value && !busy.value && !state.busy)
 // The dock the carriage is actually at (the in-progress check may be for another tool)
 const nearTool = computed(() =>
   tools.value.find((t) => Math.abs(pos.value.x - t.park.x) < 16 && Math.abs(pos.value.y - t.park.y) < 20 && Math.abs(pos.value.z - t.park.z) < 16),
@@ -272,6 +297,11 @@ const latchOptions: Option[] = [
   { value: 'gap', label: 'Partly, small gap', desc: 'Engaged, but not fully seated yet.' },
   { value: 'high', label: 'Pushing the tool up', desc: 'The carriage has lifted the tool up off its dock seat (too high).' },
   { value: 'binding', label: 'Binding sideways', desc: 'Engaging off-center or jammed.' },
+]
+const missedOptions: Option[] = [
+  { value: 'seated', label: 'Seated in its dock', desc: 'The tool stayed in its dock and sits properly; the carriage came out empty.' },
+  { value: 'crooked', label: 'Crooked on the dock', desc: 'It is sitting crooked or on top of the dock pins.' },
+  { value: 'hanging', label: 'Hanging on the carriage', desc: 'It came along but is only barely hooked on.' },
 ]
 const freedOptions: Option[] = [
   { value: 'centered', label: 'Free, carriage centered', desc: "The tool dropped into place and the carriage looks centered under the tool's mount." },
@@ -437,6 +467,26 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
       </div>
       <p class="muted">Keep a hand near the e-stop.</p>
       <div class="row"><span class="grow" /><button class="ghost" @click="step = 'check'">Back</button><button class="primary" :disabled="busy || !!onCarriage" @click="pcStart">Move under {{ label }}</button></div>
+    </template>
+
+    <template v-else-if="pcLost">
+      <div class="callout warn">
+        <b>The pickup check is no longer active</b> (Klipper left docking mode, usually after an error, a restart or a command from elsewhere).
+        Nothing will move from here. Start it again; it begins from {{ label }}'s current dock position X{{ raw.params_park_x }} Y{{ raw.params_park_y }} Z{{ raw.params_park_z }}.
+      </div>
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = 'pc-prep'">Start the pickup check again</button></div>
+    </template>
+
+    <template v-else-if="step === 'pc-missed'">
+      <div class="callout warn">
+        <b>{{ label }} didn't come out with the carriage.</b> The carriage left the dock along the pickup path, but no tool was detected on it,
+        so it wasn't fully latched at that position. The position you found is kept (live, not saved yet).
+      </div>
+      <h3>Where is {{ label }} now?</h3>
+      <div class="options">
+        <button v-for="o in missedOptions" :key="o.value" class="option" :disabled="busy" @click="answerMissed(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
+      </div>
+      <p class="hint">Seated in its dock → you'll start the pickup check again from the position you just found. Tip: when you press "Fully latched", the pins should be all the way in with no gap.</p>
     </template>
 
     <template v-else-if="step === 'pc-short'">
