@@ -85,7 +85,10 @@ export function buildTools(status: Status): ToolInfo[] {
     const probeCfg = settings[probeName.toLowerCase()]
     const mcuName = pinMcu(exCfg.heater_pin) ?? pinMcu(probeCfg?.pin) ?? pinMcu(exCfg.step_pin)
     const park = { x: t.params_park_x ?? NaN, y: t.params_park_y ?? NaN, z: t.params_park_z ?? NaN }
-    const q = probes[String(number)]
+    // Live pin state from toolchanger_ui (every change, no polling); fall back
+    // to the last DETECT_ACTIVE_TOOL_PROBE result.
+    const live = status.toolchanger_ui?.probes?.[String(number)]
+    const q = live !== undefined ? live : probes[String(number)]
     const warnings: string[] = []
 
     ;(['x', 'y', 'z'] as const).forEach((axis, i) => {

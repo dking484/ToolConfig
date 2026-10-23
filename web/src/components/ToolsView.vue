@@ -4,6 +4,7 @@ import { homed, isPrinting, state, tc, tools, tryRun } from '../store'
 import type { ToolInfo } from '../lib/tools'
 import ToolCard from './ToolCard.vue'
 import ToolEditor from './ToolEditor.vue'
+import ProbeLive from './ProbeLive.vue'
 
 const emit = defineEmits<{ go: [tab: 'dock'] }>()
 const editing = ref<ToolInfo | null>(null)
@@ -30,6 +31,7 @@ function dock(t: ToolInfo) {
       <button :disabled="!!state.busy" title="Read every tool probe to see which tool is on the carriage" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
       <button :disabled="!!state.busy || isPrinting" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
     </div>
+    <ProbeLive />
     <div class="cards">
       <ToolCard v-for="t in tools" :key="t.name" :tool="t" @select="select(t)" @park="park(t)" @edit="editing = t" @dock="dock(t)" />
     </div>

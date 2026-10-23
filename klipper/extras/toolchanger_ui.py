@@ -21,6 +21,18 @@ class ToolchangerUI:
             desc=self.cmd_TC_CLEAR_ACTIVE_TOOL_help)
         self.gcode.register_command(
             'TC_RAISE', self.cmd_TC_RAISE, desc=self.cmd_TC_RAISE_help)
+        # Live per-tool probe pin states. tool_probe registers every probe pin
+        # with the buttons module (for crash detection) and reports each
+        # change to tool_probe_endstop.note_probe_triggered; record them on
+        # the way through, so the UI can show them without polling.
+        self.probe_states = {}
+        if config.has_section('tool_probe_endstop'):
+            tpe = self.printer.load_object(config, 'tool_probe_endstop')
+            orig = tpe.note_probe_triggered
+            def note_probe_triggered(probe, eventtime, is_triggered):
+                self.probe_states[str(probe.tool)] = bool(is_triggered)
+                return orig(probe, eventtime, is_triggered)
+            tpe.note_probe_triggered = note_probe_triggered
 
     def _handle_connect(self):
         self.toolchanger = self.printer.lookup_object('toolchanger')
@@ -54,6 +66,8 @@ class ToolchangerUI:
                              else '',
             'active_tool': tc.active_tool.name if tc and tc.active_tool
                            else None,
+            # tool number -> True when the probe reads triggered (docked)
+            'probes': dict(self.probe_states),
         }
 
 def load_config(config):

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { mcus, mr, tools } from '../store'
+import ProbeLive from './ProbeLive.vue'
 
 interface Serial { device_path: string; path_by_id?: string; manufacturer?: string; product?: string; serial_number?: string; device_name?: string }
 interface Usb { vendor_id: string; product_id: string; manufacturer: string | null; product: string | null; serial: string | null; description: string | null; usb_location: string }
@@ -36,6 +37,7 @@ const toolFor = (mcu: string) => tools.value.filter((t) => t.mcu?.name === mcu).
 
 <template>
   <section class="stack">
+    <ProbeLive />
     <div class="panel">
       <header class="panel-head"><h2 class="grow">Boards Klipper is using</h2></header>
       <div class="panel-body">
