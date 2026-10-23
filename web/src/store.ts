@@ -21,7 +21,16 @@ export const state = reactive({
   pendingRestart: [] as string[], // config changes that need FIRMWARE_RESTART
   objects: [] as string[],
   dockTool: 0, // tool preselected on the Dock tab
+  // Ask the alignment wizard to open at a given step for a tool (e.g. after a failed pickup)
+  wizardEntry: null as null | { tool: number; step: 'failed' },
 })
+
+/** Jump to the Dock tab's wizard for `tool`, starting at the "what happened?" question. */
+export function realign(tool: number) {
+  state.dockTool = tool
+  state.wizardEntry = { tool, step: 'failed' }
+  location.hash = 'dock'
+}
 
 // Status is large and updates often: keep it shallow and swap the reference.
 export const status = shallowRef<Status>({})

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
-import { homed, isPrinting, state } from '../store'
+import { homed, isPrinting, realign, safety, state } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
 defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
@@ -9,11 +9,12 @@ defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
 const f = (v: number | null | undefined, d = 1) => (v === null || v === undefined || isNaN(v) ? '-' : v.toFixed(d))
 const t = computed(() => props.tool)
 const hot = computed(() => (t.value.temp ?? 0) > 50)
+const failed = computed(() => !!safety.value?.last_error && safety.value?.last_error_tool === props.tool.number)
 const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.value.offset.z)
 </script>
 
 <template>
-  <article class="panel card" :class="{ active: t.active }">
+  <article class="panel card" :class="{ active: t.active, failed }">
     <header class="panel-head">
       <span class="swatch" :style="{ background: t.color ?? 'var(--border)' }" />
       <h3>{{ t.label }}</h3>
@@ -59,6 +60,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
     <footer class="row foot">
       <button v-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (carriage ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
       <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" @click="$emit('select')">Pick up {{ t.label }}</button>
+      <button v-if="failed" class="primary" title="The last pickup of this tool failed: open the alignment wizard" @click="realign(t.number)">Realign {{ t.label }}</button>
       <button @click="$emit('edit')">Edit</button>
       <button @click="$emit('dock')">{{ t.warnings.length ? 'Find dock' : 'Calibrate' }}</button>
     </footer>
@@ -67,6 +69,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
 
 <style scoped>
 .card.active { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
+.card.failed { border-color: color-mix(in srgb, var(--err) 70%, var(--border)); }
 .swatch { width: 12px; height: 12px; border-radius: 3px; }
 .temp.hot { color: var(--warn); }
 .small { font-size: 12px; }

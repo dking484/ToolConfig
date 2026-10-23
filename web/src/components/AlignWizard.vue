@@ -7,7 +7,7 @@
 // Dock fit (tool on the carriage):
 //   check -> start (in front of dock) -> fit -> [dir -> amount -> move] ... -> test
 //   -> passed: save | failed: what happened? -> verify fix / pickup check / mount
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import NudgePad from './NudgePad.vue'
 import { configIndex, detectTools, homed, isPrinting, run, safety, state, status, tc, tools, tryRun } from '../store'
 
@@ -20,6 +20,14 @@ type Axis = 'X' | 'Y' | 'Z'
 interface Option { label: string; desc: string; value: string }
 
 const step = ref<Step>('check')
+// Opened from "Realign" after a failed pickup: start at the "what happened?" question
+function consumeEntry() {
+  const e = state.wizardEntry
+  if (e && e.tool === props.toolNumber) {
+    step.value = e.step
+    state.wizardEntry = null
+  }
+}
 const axis = ref<Axis>('Y')
 const busy = ref(false)
 const note = ref('')
@@ -310,6 +318,8 @@ const freedOptions: Option[] = [
 ]
 const totalMoved = computed(() => (['X', 'Y', 'Z'] as const).filter((a) => moved.value[a]).map((a) => `${a} ${moved.value[a] > 0 ? '+' : ''}${moved.value[a]}`).join(', '))
 const isPickup = computed(() => step.value.startsWith('pc-') || step.value === 'secure' || step.value === 'hold')
+consumeEntry()
+watch(() => state.wizardEntry, consumeEntry)
 </script>
 
 <template>

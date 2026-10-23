@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { homed, printState, safety, state, status, tc, tools, tryRun } from '../store'
+import { homed, printState, realign, safety, state, status, tc, tools, tryRun } from '../store'
 
 // klipper-toolchanger never clears its own error_message, so only show it
 // while the changer is actually in the error state.
@@ -58,6 +58,7 @@ async function dismiss() {
       <button class="blue" :disabled="!!state.busy" @click="tryRun('TC_RECOVER', 'Recover')">Re-detect &amp; clear error</button>
       <button v-if="failedTool >= 0" :disabled="!canMove" @click="tryRun(`TC_BACK_OUT T=${failedTool}`, 'Back out')">Back out of T{{ failedTool }} dock</button>
       <button v-if="failedTool >= 0" class="primary" :disabled="!canMove" @click="retry">Retry pickup T{{ failedTool }}</button>
+      <button v-if="failedTool >= 0" class="blue" title="Open the alignment wizard for this tool, starting with what happened during the pickup" @click="realign(failedTool)">Realign T{{ failedTool }}</button>
       <template v-if="paused">
         <button class="primary" :disabled="!!state.busy" @click="tryRun('RESUME', 'Resume')">Resume print</button>
         <button class="danger" :disabled="!!state.busy" @click="cancelPrint">Cancel print</button>
