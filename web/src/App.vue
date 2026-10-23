@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { firmwareRestart, homed, printState, state, status, tc } from './store'
+import { firmwareRestart, homed, isPrinting, printState, state, status, tc, tryRun } from './store'
 import RecoveryBanner from './components/RecoveryBanner.vue'
 import ToolsView from './components/ToolsView.vue'
 import DockView from './components/DockView.vue'
@@ -44,6 +44,10 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
       <span v-if="state.klippy === 'ready'" class="pill hide-sm" :class="qgl ? 'ok' : 'warn'"><span class="dot" />{{ qgl ? 'QGL done' : 'No QGL' }}</span>
       <span v-if="printState !== 'standby'" class="pill info"><span class="dot" />{{ printState }}</span>
       <span v-if="state.busy" class="pill info"><span class="dot" />Running: {{ state.busy.slice(0, 40) }}</span>
+      <template v-if="state.klippy === 'ready'">
+        <button class="small" :disabled="!!state.busy || isPrinting" title="G28: home all axes (heats the nozzle to probe temperature for Z)" @click="tryRun('G28', 'Home all')">Home</button>
+        <button class="small" :disabled="!!state.busy || isPrinting || homed !== 'xyz'" title="QUAD_GANTRY_LEVEL, then re-home Z" @click="tryRun('QUAD_GANTRY_LEVEL\nG28 Z', 'QGL + home Z')">QGL</button>
+      </template>
       <a class="btn small" href="/">Mainsail</a>
     </div>
   </header>

@@ -2,7 +2,11 @@
 import { computed } from 'vue'
 import { homed, printState, safety, state, status, tc, tools, tryRun } from '../store'
 
-const lastError = computed(() => (safety.value?.last_error as string) || (status.value.toolchanger_ui?.error_message as string) || '')
+// klipper-toolchanger never clears its own error_message, so only show it
+// while the changer is actually in the error state.
+const lastError = computed(
+  () => (safety.value?.last_error as string) || (tc.value.status === 'error' ? (status.value.toolchanger_ui?.error_message as string) : '') || '',
+)
 const failedTool = computed<number>(() => safety.value?.last_error_tool ?? -1)
 const show = computed(
   () => state.klippy === 'ready' && (tc.value.status === 'error' || !!lastError.value || (tc.value.status === 'uninitialized' && homed.value === 'xyz')),

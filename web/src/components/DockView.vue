@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { configIndex, homed, isPrinting, safety, state, status, tc, tools, tryRun } from '../store'
 import LogPanel from './LogPanel.vue'
+import AlignWizard from './AlignWizard.vue'
 
 const tool = computed(() => tools.value.find((t) => t.number === state.dockTool) ?? tools.value[0])
 const n = computed(() => tool.value?.number ?? 0)
@@ -126,6 +127,13 @@ async function saveAlignment() {
           <span v-if="aligning" class="pill info"><span class="dot" />aligning {{ tool?.label }}</span>
         </header>
         <div class="panel-body stack">
+          <AlignWizard :key="n" :tool-number="n" />
+        </div>
+      </div>
+
+      <details class="panel manual">
+        <summary class="panel-head"><h2 class="grow">Manual alignment (jog pad)</h2></summary>
+        <div class="panel-body stack">
           <ol class="steps muted">
             <li>Pick up {{ tool?.label }}, then <b>Start</b>. The carriage moves in front of the dock in docking mode, so moves are in raw toolhead coordinates.</li>
             <li>Jog until the tool sits seated in its dock, exactly as if it had just been picked up.</li>
@@ -168,7 +176,7 @@ async function saveAlignment() {
             </table>
           </div>
         </div>
-      </div>
+      </details>
 
       <div class="panel">
         <header class="panel-head"><h2 class="grow">If something goes wrong</h2></header>
@@ -200,4 +208,6 @@ async function saveAlignment() {
 .pad { display: grid; grid-template-columns: repeat(4, 64px); gap: 6px; }
 .pad .center { display: flex; align-items: center; justify-content: center; }
 p { margin: 0; }
+.manual > summary { cursor: pointer; list-style: none; }
+.manual:not([open]) > summary { border-bottom: none; }
 </style>

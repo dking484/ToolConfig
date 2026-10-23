@@ -49,7 +49,9 @@ class ToolchangerUI:
     def get_status(self, eventtime):
         tc = self.toolchanger
         return {
-            'error_message': tc.error_message if tc else '',
+            # klipper-toolchanger keeps the last message after recovery
+            'error_message': tc.error_message if tc and tc.status == 'error'
+                             else '',
             'active_tool': tc.active_tool.name if tc and tc.active_tool
                            else None,
         }
