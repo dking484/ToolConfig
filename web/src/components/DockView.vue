@@ -106,26 +106,9 @@ async function saveAlignment() {
         </div>
       </div>
 
-      <div class="panel">
-        <header class="panel-head"><h2 class="grow">2 · Repeat dock / pick-up</h2></header>
-        <div class="panel-body stack">
-          <p class="muted">Picks up {{ tool?.label }} if needed, then drops it in its dock and picks it up again, verifying the probe each time. Stops at the first failure and says what the probes saw.</p>
-          <div class="row">
-            <label class="field">Cycles <input v-model.number="cycles" type="number" min="1" max="50" style="width: 80px" /></label>
-            <span class="grow" />
-            <div class="counters">
-              <span class="pill ok"><span class="dot" />{{ safety?.test_pass ?? 0 }} passed</span>
-              <span class="pill" :class="(safety?.test_fail ?? 0) ? 'err' : ''"><span class="dot" />{{ safety?.test_fail ?? 0 }} failed</span>
-            </div>
-            <button class="primary" :disabled="!ready" @click="runTest">Run {{ cycles }}×</button>
-          </div>
-          <p v-if="!testMode" class="muted small">Tip: enable test mode first for slow, forgiving moves.</p>
-        </div>
-      </div>
-
       <details :key="`find-${n}`" class="panel manual" :open="!!tool?.warnings.length">
         <summary class="panel-head">
-          <h2 class="grow">Find {{ tool?.label }}'s dock (free jog)</h2>
+          <h2 class="grow">2 · Find {{ tool?.label }}'s dock (free jog)</h2>
           <span v-if="tool?.warnings.length" class="pill warn"><span class="dot" />dock position not valid</span>
         </summary>
         <div class="panel-body">
@@ -140,6 +123,23 @@ async function saveAlignment() {
         </header>
         <div class="panel-body stack">
           <AlignWizard :key="n" :tool-number="n" />
+        </div>
+      </div>
+
+      <div class="panel">
+        <header class="panel-head"><h2 class="grow">4 · Repeat dock / pick-up</h2></header>
+        <div class="panel-body stack">
+          <p class="muted">Picks up {{ tool?.label }} if needed, then drops it in its dock and picks it up again, verifying the probe each time. Stops at the first failure and says what the probes saw.</p>
+          <div class="row">
+            <label class="field">Cycles <input v-model.number="cycles" type="number" min="1" max="50" style="width: 80px" /></label>
+            <span class="grow" />
+            <div class="counters">
+              <span class="pill ok"><span class="dot" />{{ safety?.test_pass ?? 0 }} passed</span>
+              <span class="pill" :class="(safety?.test_fail ?? 0) ? 'err' : ''"><span class="dot" />{{ safety?.test_fail ?? 0 }} failed</span>
+            </div>
+            <button class="primary" :disabled="!ready" @click="runTest">Run {{ cycles }}×</button>
+          </div>
+          <p v-if="!testMode" class="muted small">Tip: enable test mode first for slow, forgiving moves.</p>
         </div>
       </div>
 

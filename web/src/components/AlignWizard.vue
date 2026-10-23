@@ -8,26 +8,25 @@
 //   check -> start (in front of dock) -> fit -> [dir -> amount -> move] ... -> test
 //   -> passed: save | failed: what happened? -> verify fix / pickup check / mount
 import { computed, ref } from 'vue'
+import NudgePad from './NudgePad.vue'
 import { configIndex, detectTools, homed, isPrinting, run, safety, state, status, tc, tools, tryRun } from '../store'
 
 const props = defineProps<{ toolNumber: number }>()
 
 type Step =
-  | 'check' | 'start' | 'fit' | 'dir' | 'amount' | 'test' | 'failed' | 'mount' | 'verifyfix' | 'save' | 'done'
-  | 'secure' | 'hold' | 'pc-prep' | 'pc-short' | 'pc-latch' | 'pc-free' | 'pc-freed' | 'pc-dir' | 'pc-up' | 'pc-done'
+  | 'check' | 'start' | 'fit' | 'adjust' | 'test' | 'failed' | 'mount' | 'verifyfix' | 'save' | 'done'
+  | 'secure' | 'hold' | 'pc-prep' | 'pc-short' | 'pc-latch' | 'pc-free' | 'pc-freed' | 'pc-align' | 'pc-up' | 'pc-done'
 type Axis = 'X' | 'Y' | 'Z'
 interface Option { label: string; desc: string; value: string }
 
 const step = ref<Step>('check')
 const axis = ref<Axis>('Y')
-const dirSign = ref<1 | -1>(1)
-const custom = ref('')
 const busy = ref(false)
 const note = ref('')
 const error = ref('')
 const moved = ref({ X: 0, Y: 0, Z: 0 })
-const pcDirs = ref<string[]>([])
 const upFrom = ref<'pc-short' | 'pc-latch'>('pc-short')
+const upHint = ref<'up' | 'down'>('up')
 
 const n = computed(() => props.toolNumber)
 const tool = computed(() => tools.value.find((t) => t.number === n.value))
@@ -106,23 +105,11 @@ function answerFit(v: string) {
   if (v === 'ok') step.value = 'test'
   else {
     axis.value = v as Axis
-    step.value = 'dir'
+    step.value = 'adjust'
   }
 }
-function answerDir(v: string) {
-  dirSign.value = v === '+' ? 1 : -1
-  step.value = 'amount'
-}
-async function nudge(mm: number, ax: Axis = axis.value, sign: 1 | -1 = dirSign.value, next: Step = 'fit') {
-  if (!(mm > 0 && mm <= 5)) {
-    error.value = 'Pick an amount between 0 and 5 mm'
-    return
-  }
-  const d = +(mm * sign).toFixed(3)
-  await act(async () => {
-    await run(`TC_ALIGN_NUDGE T=${n.value} AXIS=${ax} DIST=${d}`, `Move ${ax}${d > 0 ? '+' : ''}${d}`)
-    moved.value[ax] = +(moved.value[ax] + d).toFixed(3)
-  }, next)
+function onMoved(ax: Axis, d: number) {
+  moved.value[ax] = +(moved.value[ax] + d).toFixed(3)
 }
 async function test() {
   busy.value = true
@@ -214,44 +201,25 @@ async function pcGoto(z: number, next: Step) {
 function answerShort(v: string) {
   if (v === 'gap') {
     upFrom.value = 'pc-short'
+    upHint.value = 'up'
     step.value = 'pc-up'
   } else if (v === 'engage') pcGoto(parkZ.value, 'pc-latch')
   else if (v === 'latched') pcFinish()
-  else if (v === 'misaligned') {
-    pcDirs.value = []
-    step.value = 'pc-dir'
-  } else step.value = 'pc-free'
+  else if (v === 'misaligned') step.value = 'pc-align'
+  else step.value = 'pc-free'
 }
 function answerLatch(v: string) {
   if (v === 'ok') pcFinish()
-  else if (v === 'gap') {
+  else if (v === 'gap' || v === 'high') {
     upFrom.value = 'pc-latch'
+    upHint.value = v === 'gap' ? 'up' : 'down'
     step.value = 'pc-up'
-  } else if (v === 'high') nudge(0.25, 'Z', -1, 'pc-latch')
-  else step.value = 'pc-free'
+  } else step.value = 'pc-free'
 }
 function answerFreed(v: string) {
   if (v === 'centered') pcGoto(parkZ.value - 2, 'pc-short')
-  else if (v === 'off') {
-    pcDirs.value = []
-    step.value = 'pc-dir'
-  } else step.value = 'pc-free'
-}
-function toggleDir(v: string) {
-  pcDirs.value = pcDirs.value.includes(v) ? pcDirs.value.filter((x) => x !== v) : [...pcDirs.value, v]
-}
-async function pcAlign(mm: number) {
-  // Directions are the carriage's offset from the tool's mount, seen from the front.
-  const moves: [Axis, 1 | -1][] = []
-  if (pcDirs.value.includes('left')) moves.push(['X', 1])
-  if (pcDirs.value.includes('right')) moves.push(['X', -1])
-  if (pcDirs.value.includes('front')) moves.push(['Y', 1])
-  if (pcDirs.value.includes('back')) moves.push(['Y', -1])
-  if (!moves.length) {
-    error.value = 'Pick which way the carriage is off'
-    return
-  }
-  for (const [ax, s] of moves) await nudge(mm, ax, s, 'pc-short')
+  else if (v === 'off') step.value = 'pc-align'
+  else step.value = 'pc-free'
 }
 async function pcFinish() {
   await act(async () => {
@@ -264,8 +232,13 @@ async function pcFinish() {
     note.value = await savePark(live.params_park_x, live.params_park_y, live.params_park_z)
   }, 'pc-done')
 }
+// The dock the carriage is actually at (the in-progress check may be for another tool)
+const nearTool = computed(() =>
+  tools.value.find((t) => Math.abs(pos.value.x - t.park.x) < 16 && Math.abs(pos.value.y - t.park.y) < 20 && Math.abs(pos.value.z - t.park.z) < 16),
+)
 async function pcAbort() {
-  await act(() => run(`TC_PICKUP_CHECK_ABORT T=${n.value}`, 'Leave the dock'), 'check')
+  const t = nearTool.value?.number ?? n.value
+  await act(() => run(`TC_PICKUP_CHECK_ABORT T=${t}`, 'Leave the dock'), 'check')
 }
 
 // ---- question content (same wording as the hands-on session) ----
@@ -275,25 +248,9 @@ const fitOptions: Option[] = [
   { value: 'Z', label: 'Too high / too low (Z)', desc: 'Not resting down in the dock, or the carriage is pushing it down into it.' },
   { value: 'Y', label: 'Off front / back (Y)', desc: 'Not pushed far enough into the dock, or pressed too far into it.' },
 ]
-const dirOptions = computed<Option[]>(() => {
-  if (axis.value === 'Y') {
-    return [
-      { value: inSign.value > 0 ? '+' : '-', label: 'Sticking out', desc: 'The tool needs to go further into the dock.' },
-      { value: inSign.value > 0 ? '-' : '+', label: 'Pushed in too far', desc: 'The carriage presses the tool into the dock; it needs to come out a bit.' },
-    ]
-  }
-  if (axis.value === 'X') {
-    return [
-      { value: '-', label: 'Needs to move left', desc: 'Toward −X (left, facing the front of the printer).' },
-      { value: '+', label: 'Needs to move right', desc: 'Toward +X (right, facing the front of the printer).' },
-    ]
-  }
-  return [
-    { value: '-', label: 'Too high: needs to go down', desc: 'The tool is held above its seat and not resting in the dock.' },
-    { value: '+', label: 'Too low: needs to go up', desc: 'The carriage pushes the tool down into the dock.' },
-  ]
-})
-const amounts = [0.25, 0.5, 1, 2, 3]
+// Which pad button moves the tool further into its dock (docks are approached from +Y on a Voron)
+const intoDock = computed(() => (inSign.value > 0 ? '↑ Toward back' : '↓ Toward front'))
+const outOfDock = computed(() => (inSign.value > 0 ? '↓ Toward front' : '↑ Toward back'))
 const failedOptions: Option[] = [
   { value: 'clean', label: 'Latched clean, left in dock', desc: 'The pickup looked right (fully seated on the carriage), then the back-out left it properly in its dock.' },
   { value: 'fellback', label: 'Started out, fell back', desc: 'It began to come out with the carriage, then slipped back or got left behind.' },
@@ -321,12 +278,6 @@ const freedOptions: Option[] = [
   { value: 'off', label: 'Free, still off-center', desc: "The tool is free, but the carriage is not centered under the mount." },
   { value: 'jammed', label: 'Still jammed', desc: 'Lower it more.' },
 ]
-const dirChoices: Option[] = [
-  { value: 'left', label: 'Carriage too far left', desc: "Left of the tool's mount; it needs to move right (+X)." },
-  { value: 'right', label: 'Carriage too far right', desc: "Right of the mount; it needs to move left (−X)." },
-  { value: 'front', label: 'Carriage too far forward', desc: 'In front of the mount (toward you); it needs to go back (+Y).' },
-  { value: 'back', label: 'Carriage too far back', desc: 'Behind the mount; it needs to come forward (−Y).' },
-]
 const totalMoved = computed(() => (['X', 'Y', 'Z'] as const).filter((a) => moved.value[a]).map((a) => `${a} ${moved.value[a] > 0 ? '+' : ''}${moved.value[a]}`).join(', '))
 const isPickup = computed(() => step.value.startsWith('pc-') || step.value === 'secure' || step.value === 'hold')
 </script>
@@ -336,14 +287,14 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
     <div class="row crumbs muted">
       <template v-if="isPickup">
         <span class="on">Pickup check</span>›
-        <span :class="{ on: step === 'pc-short' || step === 'pc-dir' || step === 'pc-free' || step === 'pc-freed' }">Line up</span>›
+        <span :class="{ on: step === 'pc-short' || step === 'pc-align' || step === 'pc-free' || step === 'pc-freed' }">Line up</span>›
         <span :class="{ on: step === 'pc-latch' || step === 'pc-up' }">Latch</span>›
         <span :class="{ on: step === 'pc-done' }">Save</span>
       </template>
       <template v-else>
         <span :class="{ on: step === 'check' }">Check</span>›
         <span :class="{ on: step === 'start' }">Approach</span>›
-        <span :class="{ on: ['fit', 'dir', 'amount'].includes(step) }">Dock fit</span>›
+        <span :class="{ on: ['fit', 'adjust'].includes(step) }">Dock fit</span>›
         <span :class="{ on: ['test', 'failed', 'mount', 'verifyfix'].includes(step) }">Test</span>›
         <span :class="{ on: ['save', 'done'].includes(step) }">Save</span>
       </template>
@@ -353,7 +304,21 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
     </div>
 
     <!-- ===================== CHECK / START ===================== -->
-    <template v-if="step === 'check'">
+    <template v-if="step === 'check' && tc.status === 'changing'">
+      <div class="callout info">
+        <template v-if="tool?.active"><b>An alignment of {{ label }} is in progress</b> (docking mode, {{ label }} on the carriage).</template>
+        <template v-else><b>A pickup check is in progress</b>: the empty carriage is in docking mode{{ nearTool ? ` at ${nearTool.label}'s dock` : '' }}.</template>
+        Pick up where you left off, or leave the dock safely.
+      </div>
+      <div class="row">
+        <span class="grow" />
+        <button v-if="tool?.active" :disabled="busy" @click="cancel">Cancel alignment</button>
+        <button v-else :disabled="busy" @click="pcAbort">Leave the dock</button>
+        <button class="primary" :disabled="busy || (!tool?.active && nearTool?.number !== n)" :title="!tool?.active && nearTool && nearTool.number !== n ? `The carriage is at ${nearTool.label}'s dock: select ${nearTool.label} above to resume` : ''" @click="step = tool?.active ? 'fit' : zRel < -0.5 ? 'pc-short' : 'pc-latch'">Resume</button>
+      </div>
+    </template>
+
+    <template v-else-if="step === 'check'">
       <p>Two checks, in this order:</p>
       <ol class="muted list">
         <li><b>Pickup check</b> (carriage empty, {{ label }} in its dock): the carriage comes up under {{ label }} slowly and you tell me how it lines up and latches. This finds the X/Y/Z where it really grabs the tool.</li>
@@ -387,24 +352,15 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
       <div class="row"><span class="grow" /><button class="ghost small" :disabled="busy" @click="cancel">Cancel alignment</button></div>
     </template>
 
-    <template v-else-if="step === 'dir'">
-      <h3>Which way is {{ label }} off in {{ axis }}?</h3>
-      <div class="options">
-        <button v-for="o in dirOptions" :key="o.label" class="option" @click="answerDir(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
-      </div>
-      <div class="row"><button class="ghost" @click="step = 'fit'">Back</button></div>
-    </template>
-
-    <template v-else-if="step === 'amount'">
-      <h3>Roughly how far? I'll move it slowly so you can watch.</h3>
-      <p class="muted">If you're not sure, pick a bit less than it looks; you'll be asked again afterwards.</p>
-      <div class="row">
-        <button v-for="a in amounts" :key="a" :disabled="busy" @click="nudge(a)">{{ a }} mm</button>
-        <input v-model="custom" class="mono" style="width: 80px" placeholder="mm" inputmode="decimal" />
-        <button :disabled="busy || !custom" @click="nudge(parseFloat(custom))">Move</button>
-        <span class="grow" />
-        <button class="ghost" @click="step = 'dir'">Back</button>
-      </div>
+    <template v-else-if="step === 'adjust'">
+      <h3>Move {{ label }} until it sits right in the dock. Small steps; each move is confirmed below.</h3>
+      <p class="hint">
+        <template v-if="axis === 'Y'">Sticking out → press <b>{{ intoDock }}</b> (further into the dock). Pushed in too far → press <b>{{ outOfDock }}</b>.</template>
+        <template v-else-if="axis === 'X'">Press <b>← Left</b> or <b>Right →</b> until the tool is centered in the dock.</template>
+        <template v-else>Tool held above its seat → press <b>Down</b>. Carriage pushing it down into the dock → press <b>Up</b>.</template>
+      </p>
+      <NudgePad :tool-number="n" @moved="onMoved" />
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = 'fit'">Check again</button></div>
     </template>
 
     <template v-else-if="step === 'test'">
@@ -492,12 +448,10 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
     </template>
 
     <template v-else-if="step === 'pc-up'">
-      <h3>Raise it by how much? It moves at 1 mm/s.</h3>
-      <div class="row">
-        <button v-for="a in [0.25, 0.5, 1]" :key="a" :disabled="busy" @click="nudge(a, 'Z', 1, upFrom)">{{ a }} mm</button>
-        <span class="grow" />
-        <button class="ghost" @click="step = upFrom">Back</button>
-      </div>
+      <h3 v-if="upHint === 'up'">Press <b>Up</b> in small steps until the carriage fully latches onto {{ label }}.</h3>
+      <h3 v-else>Press <b>Down</b> in small steps until {{ label }} rests on its dock seat again (the carriage is lifting it).</h3>
+      <NudgePad :tool-number="n" axes="Z" :initial-step="0.25" @moved="onMoved" />
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = upFrom">Check again</button></div>
     </template>
 
     <template v-else-if="step === 'pc-latch'">
@@ -509,11 +463,9 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
     </template>
 
     <template v-else-if="step === 'pc-free'">
-      <h3>Lower it so {{ label }} can drop back into place. By how much?</h3>
-      <p class="muted">Straight down only, no sideways movement.</p>
-      <div class="row">
-        <button v-for="a in [0.5, 1, 2]" :key="a" :disabled="busy" @click="nudge(a, 'Z', -1, 'pc-freed')">{{ a }} mm</button>
-      </div>
+      <h3>Press <b>Down</b> until {{ label }} drops back into place and is free. Straight down only, no sideways moves while it's jammed.</h3>
+      <NudgePad :tool-number="n" axes="Z" :initial-step="0.5" @moved="onMoved" />
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = 'pc-freed'">It's free now</button></div>
     </template>
 
     <template v-else-if="step === 'pc-freed'">
@@ -523,17 +475,11 @@ const isPickup = computed(() => step.value.startsWith('pc-') || step.value === '
       </div>
     </template>
 
-    <template v-else-if="step === 'pc-dir'">
-      <h3>Where is the carriage relative to {{ label }}'s mount? (Pick both if it's off in X and Y; directions as seen from the front.)</h3>
-      <div class="options">
-        <button v-for="o in dirChoices" :key="o.value" class="option" :class="{ picked: pcDirs.includes(o.value) }" @click="toggleDir(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
-      </div>
-      <h3>Roughly how far off?</h3>
-      <div class="row">
-        <button v-for="a in [0.25, 0.5, 1, 2]" :key="a" :disabled="busy || !pcDirs.length" @click="pcAlign(a)">{{ a }} mm</button>
-        <span class="grow" />
-        <button class="ghost" @click="step = 'pc-short'">Back</button>
-      </div>
+    <template v-else-if="step === 'pc-align'">
+      <h3>Line the carriage up under {{ label }}'s mount: move it the way it needs to go, as seen standing at the front of the printer.</h3>
+      <p class="hint">Nothing is touching at this height, so sideways moves are safe. Each move is confirmed below.</p>
+      <NudgePad :tool-number="n" axes="XY" :initial-step="0.25" @moved="onMoved" />
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = 'pc-short'">Check again</button></div>
     </template>
 
     <template v-else-if="step === 'pc-done'">
@@ -556,7 +502,8 @@ h3 { font-size: 14.5px; line-height: 1.4; }
 .option { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; white-space: normal; padding: 10px 12px; }
 .option span { color: var(--muted); font-size: 12.5px; }
 .option:hover:not(:disabled) { border-color: var(--accent-2); }
-.option.picked { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, var(--panel-2)); }
+.hint { color: var(--muted); font-size: 13px; }
+.hint b { color: var(--text); }
 .blockers { margin: 0; padding-left: 20px; color: var(--warn); }
 .list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
 </style>
