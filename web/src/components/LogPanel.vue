@@ -8,6 +8,8 @@ const cmd = ref('')
 const filterTc = ref(true)
 
 const TC = /tool|dock|T\d|probe|TC_|changer|pick|park|align|verify|detect|error|!!/i
+// Temperature reports ("B:25.0 /0.0 T0:150.6 /150.0 ...") match T\d but are noise here
+const TEMP = /\bT\d+:[\d.]+ \/[\d.]+/
 
 async function toBottom() {
   await nextTick()
@@ -32,7 +34,7 @@ const time = (t: number) => new Date(t).toLocaleTimeString([], { hour12: false }
       <label class="row muted small"><input v-model="filterTc" type="checkbox" /> tool-changer lines only</label>
     </header>
     <div ref="box" class="lines mono" :class="{ tall: props.tall }">
-      <div v-for="(l, i) in state.log.filter((x) => !filterTc || x.kind === 'cmd' || TC.test(x.text))" :key="i" :class="l.kind">
+      <div v-for="(l, i) in state.log.filter((x) => !filterTc || x.kind === 'cmd' || (TC.test(x.text) && !TEMP.test(x.text)))" :key="i" :class="l.kind">
         <span class="t">{{ time(l.time) }}</span> <span>{{ l.kind === 'cmd' ? '> ' : '' }}{{ l.text }}</span>
       </div>
     </div>

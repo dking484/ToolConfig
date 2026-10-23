@@ -93,6 +93,10 @@ export function buildTools(status: Status): ToolInfo[] {
       if (isNaN(v)) warnings.push(`params_park_${axis} is not set`)
       else if (v < min[i] || v > max[i]) warnings.push(`Park ${axis.toUpperCase()} ${v} is outside the axis range ${min[i]}..${max[i]}`)
     })
+    if (!isNaN(park.y) && typeof t.params_safe_y === 'number') {
+      const approach = Math.max(0, ...((t.params_pickup_path as any[] | undefined) ?? []).map((p) => p.y ?? 0))
+      if (t.params_safe_y < park.y + approach + 10) warnings.push(`Safe Y ${t.params_safe_y} is too close to the dock (park Y ${park.y}); the carriage would move sideways next to the docks`)
+    }
     const path = t.params_pickup_path as any[] | undefined
     if (!path?.length) warnings.push('No pickup path configured')
     else if (!path.some((p) => 'verify' in p)) warnings.push('Pickup path has no verify point, so a failed pickup is not detected')

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { configIndex, homed, isPrinting, safety, state, status, tc, tools, tryRun } from '../store'
 import LogPanel from './LogPanel.vue'
 import AlignWizard from './AlignWizard.vue'
+import DockFinder from './DockFinder.vue'
 
 const tool = computed(() => tools.value.find((t) => t.number === state.dockTool) ?? tools.value[0])
 const n = computed(() => tool.value?.number ?? 0)
@@ -121,6 +122,16 @@ async function saveAlignment() {
           <p v-if="!testMode" class="muted small">Tip: enable test mode first for slow, forgiving moves.</p>
         </div>
       </div>
+
+      <details :key="`find-${n}`" class="panel manual" :open="!!tool?.warnings.length">
+        <summary class="panel-head">
+          <h2 class="grow">Find {{ tool?.label }}'s dock (free jog)</h2>
+          <span v-if="tool?.warnings.length" class="pill warn"><span class="dot" />dock position not valid</span>
+        </summary>
+        <div class="panel-body">
+          <DockFinder :tool-number="n" />
+        </div>
+      </details>
 
       <div class="panel">
         <header class="panel-head">

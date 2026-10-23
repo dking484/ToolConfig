@@ -4,7 +4,7 @@ import type { ToolInfo } from '../lib/tools'
 import { homed, isPrinting, state } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
-defineEmits<{ select: []; edit: []; dock: [] }>()
+defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
 
 const f = (v: number | null | undefined, d = 1) => (v === null || v === undefined || isNaN(v) ? '-' : v.toFixed(d))
 const t = computed(() => props.tool)
@@ -57,9 +57,10 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       </ul>
     </div>
     <footer class="row foot">
-      <button class="blue" :disabled="t.active || homed !== 'xyz' || isPrinting || !!state.busy" @click="$emit('select')">Pick up {{ t.label }}</button>
+      <button v-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (carriage ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
+      <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" @click="$emit('select')">Pick up {{ t.label }}</button>
       <button @click="$emit('edit')">Edit</button>
-      <button @click="$emit('dock')">Dock test</button>
+      <button @click="$emit('dock')">{{ t.warnings.length ? 'Find dock' : 'Calibrate' }}</button>
     </footer>
   </article>
 </template>
