@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Live per-tool probe states (pushed by Klipper on every change, no polling).
+// Live per-tool sensor states (pushed by Klipper on every change, no polling),
+// shown as where each tool is rather than raw probe states.
 import { computed, ref, watch } from 'vue'
 import { status, tools } from '../store'
 
@@ -27,32 +28,42 @@ const rows = computed(() =>
     return {
       label: t.label,
       key: String(t.number),
-      state: v === undefined ? 'unknown' : v ? 'triggered' : 'open',
-      // On the carriage the probe should read open; triggered there means pressed or not connected
+      where: v === undefined ? 'unknown' : v ? 'dock' : 'gantry',
+      raw: v === undefined ? 'no reading yet' : v ? 'probe pressed (triggered)' : 'probe released (open)',
+      // The toolchanger says this tool is mounted, but its sensor says it's in a dock
       mismatch: t.active && v === true,
     }
   }),
 )
-const openCount = computed(() => rows.value.filter((r) => r.state === 'open').length)
+const onGantry = computed(() => rows.value.filter((r) => r.where === 'gantry'))
 </script>
 
 <template>
   <div class="probelive panel">
     <div class="row head">
-      <strong>Live probe monitor</strong>
-      <span v-for="r in rows" :key="r.key" class="pill" :class="[r.state === 'open' ? 'ok' : r.state === 'triggered' ? '' : 'warn', { flash: flash[r.key], bad: r.mismatch }]">
-        <span class="dot" />{{ r.label }} {{ r.state }}
+      <strong>Where each tool is (live)</strong>
+      <span
+        v-for="r in rows"
+        :key="r.key"
+        class="pill"
+        :class="[r.where === 'gantry' ? 'ok' : r.where === 'dock' ? '' : 'warn', { flash: flash[r.key], bad: r.mismatch }]"
+        :title="`${r.label} sensor: ${r.raw}`"
+      >
+        <span class="dot" />{{ r.label }} {{ r.where === 'gantry' ? 'on gantry' : r.where === 'dock' ? 'in dock' : 'unknown' }}
       </span>
       <span class="grow" />
       <span v-if="!live" class="muted small">Needs the updated toolchanger_ui.py (Klipper restart).</span>
     </div>
     <p class="muted small">
-      Updates the instant a probe changes. A tool in its dock reads <b>triggered</b>; the tool on the carriage reads <b>open</b>.
-      Push a tool's nozzle up and it should flip to triggered, then back to open when you let go. If it never changes, the probe signal isn't reaching the board (connector, wrong pin, wiring).
-      <template v-if="openCount > 1"> <b class="warn-text">More than one probe reads open: a tool may be crooked in its dock.</b></template>
+      Read from each tool's Tap sensor, updated the instant it changes. A tool resting in its dock has its sensor pressed; on the gantry it's released.
+      <b>To test a sensor:</b> with the tool on the gantry, push its nozzle up. It should briefly show <i>in dock</i> while pressed, then <i>on gantry</i> when you let go.
+      If it never changes, the sensor signal isn't reaching the board (connector, wrong pin, wiring).
+    </p>
+    <p v-if="onGantry.length > 1" class="small warn-text">
+      More than one tool shows "on gantry" ({{ onGantry.map((r) => r.label).join(', ') }}): one of them is probably sitting crooked in its dock, so its sensor isn't pressed.
     </p>
     <p v-for="r in rows.filter((x) => x.mismatch)" :key="'m' + r.key" class="small warn-text">
-      {{ r.label }} is the active tool but its probe reads triggered: it's pressed, not fully seated, or its signal isn't connected.
+      {{ r.label }} is supposed to be on the gantry, but its sensor says it's in a dock: it's being pressed, isn't fully seated, or the sensor isn't connected.
     </p>
   </div>
 </template>

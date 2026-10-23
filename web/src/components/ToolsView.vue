@@ -28,7 +28,7 @@ function dock(t: ToolInfo) {
     <div class="row">
       <h2 class="grow">{{ tools.length }} tools <span class="muted">· active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span></h2>
       <button v-if="active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || active.warnings.length > 0" @click="park(active)">Dock {{ active.label }} (empty the gantry)</button>
-      <button :disabled="!!state.busy" title="Read every tool probe to see which tool is on the carriage" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
+      <button :disabled="!!state.busy" title="Read every tool probe to see which tool is on the gantry" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
       <button :disabled="!!state.busy || isPrinting" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
     </div>
     <ProbeLive />

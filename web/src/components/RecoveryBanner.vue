@@ -18,7 +18,7 @@ const canMove = computed(() => homed.value === 'xyz' && !state.busy)
 async function retry() {
   const n = failedTool.value
   if (n < 0) return
-  if (!confirm(`Retry picking up T${n}?\n\nMake sure T${n} is seated in its dock and nothing is hanging off the carriage.`)) return
+  if (!confirm(`Retry picking up T${n}?\n\nMake sure T${n} is seated in its dock and nothing is hanging off the gantry.`)) return
   await tryRun(`TC_RETRY_PICKUP T=${n}`, `Retry pickup T${n}`)
 }
 async function cancelPrint() {
@@ -47,9 +47,9 @@ async function dismiss() {
     <p v-if="lastError" class="msg mono">{{ lastError }}</p>
 
     <div class="row probes">
-      <span class="muted">Probe states (last check):</span>
-      <span v-for="t in tools" :key="t.number" class="pill" :class="t.probeState === 'open' ? 'ok' : t.probeState === 'docked' ? '' : 'warn'">
-        <span class="dot" />{{ t.label }} {{ t.probeState === 'open' ? 'on carriage' : t.probeState }}
+      <span class="muted">Where the sensors say each tool is:</span>
+      <span v-for="t in tools" :key="t.number" class="pill" :class="t.where === 'gantry' ? 'ok' : t.where === 'dock' ? '' : 'warn'">
+        <span class="dot" />{{ t.label }} {{ t.where === 'gantry' ? 'on gantry' : t.where === 'dock' ? 'in dock' : 'unknown' }}
       </span>
     </div>
 

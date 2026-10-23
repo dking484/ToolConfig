@@ -21,7 +21,7 @@ const disabled = computed(() => !!state.busy || isPrinting.value)
         Tool changes and dock tests need both.
       </span>
       <span v-if="homed !== 'xyz' && !onCarriage" class="err-text">
-        No tool detected on the carriage. Z homing uses the tool's probe, so put a tool on the carriage first, then press <b>Detect tool</b>.
+        No tool detected on the gantry. Z homing uses the tool's probe, so put a tool on the gantry first, then press <b>Detect tool</b>.
       </span>
       <span v-else-if="homed !== 'xyz'" class="muted">Homing heats {{ onCarriage?.label }}'s nozzle to the probing temperature (150 °C) before probing Z.</span>
     </div>

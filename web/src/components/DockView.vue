@@ -79,7 +79,7 @@ async function saveAlignment() {
           <table class="kv">
             <tbody>
               <tr><td>Saved dock</td><td class="mono">X {{ f(tool.park.x) }} · Y {{ f(tool.park.y) }} · Z {{ f(tool.park.z) }} <span class="muted">· safe Y {{ f(tool.safeY, 1) }}</span></td></tr>
-              <tr><td>On carriage</td><td>{{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }} <span class="muted">· {{ tool.label }} probe: {{ tool.probeState }}</span></td></tr>
+              <tr><td>On gantry</td><td>{{ tc.tool ? String(tc.tool).replace('tool ', '') : 'nothing' }} <span class="muted">· {{ tool.label }}'s sensor says: {{ tool.where === 'gantry' ? 'on gantry' : tool.where === 'dock' ? 'in dock' : 'unknown' }}</span></td></tr>
             </tbody>
           </table>
           <ul class="checks">
@@ -94,7 +94,7 @@ async function saveAlignment() {
           <span class="pill" :class="testMode ? 'info' : ''"><span class="dot" />{{ testMode ? 'ON' : 'off' }}</span>
         </header>
         <div class="panel-body stack">
-          <p class="muted">Slows every dock move and makes a failed pickup report-only: the carriage backs out of the dock, nothing pauses, and you can retry right away.</p>
+          <p class="muted">Slows every dock move and makes a failed pickup report-only: the gantry backs out of the dock, nothing pauses, and you can retry right away.</p>
           <div class="row">
             <label class="field">Dock speed <span class="mono">{{ speed }}%</span>
               <input v-model.number="speed" type="range" min="10" max="100" step="5" :disabled="testMode" />
@@ -147,7 +147,7 @@ async function saveAlignment() {
         <summary class="panel-head"><h2 class="grow">Manual alignment (jog pad)</h2></summary>
         <div class="panel-body stack">
           <ol class="steps muted">
-            <li>Pick up {{ tool?.label }}, then <b>Start</b>. The carriage moves in front of the dock in docking mode, so moves are in raw toolhead coordinates.</li>
+            <li>Pick up {{ tool?.label }}, then <b>Start</b>. The gantry moves in front of the dock in docking mode, so moves are in raw toolhead coordinates.</li>
             <li>Jog until the tool sits seated in its dock, exactly as if it had just been picked up.</li>
             <li><b>Test this position</b>: undocks and redocks using it, and verifies pickup. Repeat as needed.</li>
             <li><b>Save</b> writes the park position to the tool's config file. No restart needed.</li>

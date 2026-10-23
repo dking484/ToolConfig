@@ -119,7 +119,7 @@ export async function tryRun(script: string, label = script) {
   }
 }
 
-// ---- "needs a tool on the carriage" guard -----------------------------------
+// ---- "needs a tool on the gantry" guard -----------------------------------
 // Homing Z and QGL probe with the tool's own probe. Check the probes right
 // before running, and ask the user instead of failing halfway.
 export interface ToolPrompt {
@@ -130,7 +130,7 @@ export interface ToolPrompt {
 }
 export const toolPrompt = shallowRef<ToolPrompt | null>(null)
 
-/** Fresh probe read (not the cached status), returns open (= on carriage) tools. */
+/** Fresh probe read (not the cached status), returns open (= on gantry) tools. */
 export async function detectTools(): Promise<number[]> {
   await mr.gcode('DETECT_ACTIVE_TOOL_PROBE')
   const res = await mr.call('printer.objects.query', { objects: { tool_probe_endstop: ['last_tools_query'] } })
@@ -140,10 +140,10 @@ export async function detectTools(): Promise<number[]> {
     .map(([n]) => Number(n))
 }
 
-/** Run `script` only if exactly one tool is on the carriage; otherwise ask. */
+/** Run `script` only if exactly one tool is on the gantry; otherwise ask. */
 export async function runWithTool(script: string, label: string) {
   log('DETECT_ACTIVE_TOOL_PROBE', 'cmd')
-  state.busy = 'Checking for a tool on the carriage'
+  state.busy = 'Checking for a tool on the gantry'
   let open: number[]
   try {
     open = await detectTools()

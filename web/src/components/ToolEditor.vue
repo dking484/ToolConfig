@@ -24,7 +24,7 @@ const fields: Field[] = [
   { group: 'Dock position', label: 'Park X', section: t.name, key: 'params_park_x', kind: 'number', apply: 'tool', help: 'Toolhead X when the tool sits in its dock' },
   { group: 'Dock position', label: 'Park Y', section: t.name, key: 'params_park_y', kind: 'number', apply: 'tool' },
   { group: 'Dock position', label: 'Park Z', section: t.name, key: 'params_park_z', kind: 'number', apply: 'tool' },
-  { group: 'Dock position', label: 'Safe Y', section: t.name, key: 'params_safe_y', kind: 'number', apply: 'tool', help: 'Y the carriage retreats to before moving sideways' },
+  { group: 'Dock position', label: 'Safe Y', section: t.name, key: 'params_safe_y', kind: 'number', apply: 'tool', help: 'Y the gantry retreats to before moving sideways' },
   { group: 'Tool offsets', label: 'X offset', section: t.name, key: 'gcode_x_offset', kind: 'number', apply: 'tool' },
   { group: 'Tool offsets', label: 'Y offset', section: t.name, key: 'gcode_y_offset', kind: 'number', apply: 'tool' },
   { group: 'Tool offsets', label: 'Z offset', section: t.name, key: 'gcode_z_offset', kind: 'number', apply: 'tool' },

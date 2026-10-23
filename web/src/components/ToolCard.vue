@@ -18,9 +18,10 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
     <header class="panel-head">
       <span class="swatch" :style="{ background: t.color ?? 'var(--border)' }" />
       <h3>{{ t.label }}</h3>
-      <span v-if="t.active" class="pill ok"><span class="dot" />on carriage</span>
-      <span v-else-if="t.probeState === 'open'" class="pill warn" title="This tool's probe reads open but the changer thinks another tool is active"><span class="dot" />probe open</span>
-      <span v-else class="pill"><span class="dot" />{{ t.probeState === 'docked' ? 'docked' : 'unknown' }}</span>
+      <span v-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
+      <span v-else-if="t.active" class="pill err" title="The toolchanger says this tool is mounted, but its sensor says it's in a dock (pressed, not seated, or not connected)"><span class="dot" />On gantry? sensor says dock</span>
+      <span v-else-if="t.where === 'gantry'" class="pill warn" title="Its sensor says it's on the gantry, but the toolchanger has another tool (or none) selected. Press Detect tool, or it may be sitting crooked in its dock."><span class="dot" />On gantry?</span>
+      <span v-else class="pill"><span class="dot" />{{ t.where === 'dock' ? 'In dock' : 'Unknown' }}</span>
       <span class="grow" />
       <span class="temp mono" :class="{ hot }">{{ f(t.temp) }}° <span class="muted">/ {{ f(t.target, 0) }}°</span></span>
     </header>
@@ -58,7 +59,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       </ul>
     </div>
     <footer class="row foot">
-      <button v-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (carriage ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
+      <button v-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (gantry ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
       <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" @click="$emit('select')">Pick up {{ t.label }}</button>
       <button v-if="failed" class="primary" title="The last pickup of this tool failed: open the alignment wizard" @click="realign(t.number)">Realign {{ t.label }}</button>
       <button @click="$emit('edit')">Edit</button>

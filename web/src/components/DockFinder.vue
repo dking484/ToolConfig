@@ -93,7 +93,7 @@ async function saveHere() {
     <ol class="muted list">
       <li><b>Empty the gantry</b> (dock the current tool) and go to <b>safe Y</b>.</li>
       <li>Move X to roughly in line with {{ label }}, and Z to about <b>10 mm below</b> the tool's mount.</li>
-      <li>Bring Y toward the dock until the carriage is right under {{ label }}'s mount.</li>
+      <li>Bring Y toward the dock until the gantry is right under {{ label }}'s mount.</li>
       <li>Raise Z in small steps (0.5, then 0.1) until the pins line up and just start to latch.</li>
       <li><b>Use this position</b> as {{ label }}'s dock, then <b>Back off</b>, then run the wizard's <b>Pickup check</b> to refine it.</li>
     </ol>

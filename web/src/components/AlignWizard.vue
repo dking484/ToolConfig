@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Guided dock calibration: the same questions and moves as a hands-on session.
 //
-// Pickup check (empty carriage under the docked tool):
+// Pickup check (empty gantry under the docked tool):
 //   pc-prep -> pc-short (2 mm below) -> [up / align / free] ... -> pc-latch (saved
 //   height) -> [up / down / free] ... -> finish (use this position, pick up, verify, save)
-// Dock fit (tool on the carriage):
+// Dock fit (tool on the gantry):
 //   check -> start (in front of dock) -> fit -> [dir -> amount -> move] ... -> test
 //   -> passed: save | failed: what happened? -> verify fix / pickup check / mount
 import { computed, ref, watch } from 'vue'
@@ -94,7 +94,7 @@ async function savePark(x: number, y: number, z: number) {
   return `Saved ${label.value}'s dock position X${x} Y${y} Z${z} to ${files.join(', ')}. No restart needed.`
 }
 
-// ======================= Dock fit (tool on the carriage) =======================
+// ======================= Dock fit (tool on the gantry) =======================
 async function begin() {
   await act(async () => {
     if (!tool.value?.active) {
@@ -152,7 +152,7 @@ async function mounted() {
     await run('TC_RECOVER', 'Re-detect')
     await settle()
     const t = tools.value.find((x) => x.number === n.value)
-    if (!t?.active) throw new Error(`${label.value} is still not detected on the carriage. Check it is fully seated.`)
+    if (!t?.active) throw new Error(`${label.value} is still not detected on the gantry. Check it is fully seated.`)
   }, 'check')
 }
 async function fixVerify() {
@@ -166,7 +166,7 @@ async function fixVerify() {
     await configIndex.load()
     await configIndex.write([{ section: 'toolchanger', key: 'params_pickup_path', value: literal }])
     for (const t of tools.value) await run(`SET_TOOL_PARAMETER T=${t.number} PARAMETER=params_pickup_path VALUE="${literal}"`, 'Apply pickup path')
-    // The tool is in its dock and the carriage backed out: pick it up again with the corrected check
+    // The tool is in its dock and the gantry backed out: pick it up again with the corrected check
     await run(`TC_RETRY_PICKUP T=${n.value}`, `Retry pickup ${label.value}`)
   }, 'save')
 }
@@ -183,13 +183,13 @@ async function cancel() {
   }, 'check')
 }
 
-// ===================== Pickup check (empty carriage) =====================
+// ===================== Pickup check (empty gantry) =====================
 async function secured() {
-  // The tool should now be in its dock and the carriage empty
+  // The tool should now be in its dock and the gantry empty
   await act(async () => {
     await run('TC_RECOVER', 'Re-detect')
     const open = await detectTools()
-    if (open.length) throw new Error(`The probes still show ${open.map((x) => 'T' + x).join(', ')} as not docked. Seat it properly in its dock.`)
+    if (open.length) throw new Error(`The sensors still show ${open.map((x) => 'T' + x).join(', ')} as not in a dock. Seat it properly in its dock.`)
   }, 'pc-prep')
 }
 async function dropOff() {
@@ -202,7 +202,7 @@ async function dropOff() {
 async function pcStart() {
   moved.value = { X: 0, Y: 0, Z: 0 }
   await act(async () => {
-    await run(`TC_PICKUP_CHECK_START T=${n.value}`, `Empty carriage under ${label.value}`)
+    await run(`TC_PICKUP_CHECK_START T=${n.value}`, `Empty gantry under ${label.value}`)
     await settle() // let the 'changing' status arrive before showing the question
   }, 'pc-short')
 }
@@ -265,7 +265,7 @@ async function answerMissed(v: string) {
 const pcActive = computed(() => tc.value.status === 'changing' && !tool.value?.active)
 const PC_STEPS: Step[] = ['pc-short', 'pc-latch', 'pc-align', 'pc-up', 'pc-free', 'pc-freed']
 const pcLost = computed(() => PC_STEPS.includes(step.value) && !pcActive.value && !busy.value && !state.busy)
-// The dock the carriage is actually at (the in-progress check may be for another tool)
+// The dock the gantry is actually at (the in-progress check may be for another tool)
 const nearTool = computed(() =>
   tools.value.find((t) => Math.abs(pos.value.x - t.park.x) < 16 && Math.abs(pos.value.y - t.park.y) < 20 && Math.abs(pos.value.z - t.park.z) < 16),
 )
@@ -278,42 +278,42 @@ async function pcAbort() {
 const fitOptions: Option[] = [
   { value: 'ok', label: 'Seated perfectly', desc: 'Fully in the dock with no strain, as if it had been dropped off cleanly.' },
   { value: 'X', label: 'Off left / right (X)', desc: 'Pushed to one side, or the dock is not centered on the tool.' },
-  { value: 'Z', label: 'Too high / too low (Z)', desc: 'Not resting down in the dock, or the carriage is pushing it down into it.' },
+  { value: 'Z', label: 'Too high / too low (Z)', desc: 'Not resting down in the dock, or the gantry is pushing it down into it.' },
   { value: 'Y', label: 'Off front / back (Y)', desc: 'Not pushed far enough into the dock, or pressed too far into it.' },
 ]
 // Which pad button moves the tool further into its dock (docks are approached from +Y on a Voron)
 const intoDock = computed(() => (inSign.value > 0 ? '↑ Toward back' : '↓ Toward front'))
 const outOfDock = computed(() => (inSign.value > 0 ? '↓ Toward front' : '↑ Toward back'))
 const failedOptions: Option[] = [
-  { value: 'clean', label: 'Latched clean, left in dock', desc: 'The pickup looked right (fully seated on the carriage), then the back-out left it properly in its dock.' },
-  { value: 'fellback', label: 'Started out, fell back', desc: 'It began to come out with the carriage, then slipped back or got left behind.' },
-  { value: 'never', label: 'Never came out', desc: 'The carriage went in and came back out empty; the tool stayed in its dock.' },
-  { value: 'jammed', label: 'Jammed / bumped it', desc: 'The carriage hit or jammed against the tool on the way up.' },
-  { value: 'hanging', label: 'Hanging on the carriage', desc: 'It came along but is only barely hooked on one pin.' },
+  { value: 'clean', label: 'Latched clean, left in dock', desc: 'The pickup looked right (fully seated on the gantry), then the back-out left it properly in its dock.' },
+  { value: 'fellback', label: 'Started out, fell back', desc: 'It began to come out with the gantry, then slipped back or got left behind.' },
+  { value: 'never', label: 'Never came out', desc: 'The gantry went in and came back out empty; the tool stayed in its dock.' },
+  { value: 'jammed', label: 'Jammed / bumped it', desc: 'The gantry hit or jammed against the tool on the way up.' },
+  { value: 'hanging', label: 'Hanging on the gantry', desc: 'It came along but is only barely hooked on one pin.' },
   { value: 'crooked', label: 'Crooked on the dock', desc: 'It is sitting crooked or on top of the dock pins.' },
   { value: 'unseen', label: "Didn't see it", desc: 'I missed the moment. Try picking it up again while I watch.' },
 ]
 const shortOptions: Option[] = [
-  { value: 'gap', label: 'Not touching yet', desc: "There's still a gap between the carriage and the tool's mount." },
+  { value: 'gap', label: 'Not touching yet', desc: "There's still a gap between the gantry and the tool's mount." },
   { value: 'engage', label: 'Starting to engage', desc: 'The pins or magnets are just starting to meet, cleanly and centered.' },
   { value: 'latched', label: 'Already latched', desc: "It's already fully latched onto the tool at this height." },
-  { value: 'misaligned', label: 'Misaligned in X/Y', desc: "The carriage is not lined up under the tool's mount (off to a side, or front/back)." },
+  { value: 'misaligned', label: 'Misaligned in X/Y', desc: "The gantry is not lined up under the tool's mount (off to a side, or front/back)." },
   { value: 'jammed', label: 'Jammed against it', desc: "It's pressing or binding on the tool; the tool can't move." },
 ]
 const latchOptions: Option[] = [
   { value: 'ok', label: 'Fully latched', desc: 'Pins fully in, magnets fully seated, no gap, and the tool is not lifted off its dock seat.' },
   { value: 'gap', label: 'Partly, small gap', desc: 'Engaged, but not fully seated yet.' },
-  { value: 'high', label: 'Pushing the tool up', desc: 'The carriage has lifted the tool up off its dock seat (too high).' },
+  { value: 'high', label: 'Pushing the tool up', desc: 'The gantry has lifted the tool up off its dock seat (too high).' },
   { value: 'binding', label: 'Binding sideways', desc: 'Engaging off-center or jammed.' },
 ]
 const missedOptions: Option[] = [
-  { value: 'seated', label: 'Seated in its dock', desc: 'The tool stayed in its dock and sits properly; the carriage came out empty.' },
+  { value: 'seated', label: 'Seated in its dock', desc: 'The tool stayed in its dock and sits properly; the gantry came out empty.' },
   { value: 'crooked', label: 'Crooked on the dock', desc: 'It is sitting crooked or on top of the dock pins.' },
-  { value: 'hanging', label: 'Hanging on the carriage', desc: 'It came along but is only barely hooked on.' },
+  { value: 'hanging', label: 'Hanging on the gantry', desc: 'It came along but is only barely hooked on.' },
 ]
 const freedOptions: Option[] = [
-  { value: 'centered', label: 'Free, carriage centered', desc: "The tool dropped into place and the carriage looks centered under the tool's mount." },
-  { value: 'off', label: 'Free, still off-center', desc: "The tool is free, but the carriage is not centered under the mount." },
+  { value: 'centered', label: 'Free, gantry centered', desc: "The tool dropped into place and the gantry looks centered under the tool's mount." },
+  { value: 'off', label: 'Free, still off-center', desc: "The tool is free, but the gantry is not centered under the mount." },
   { value: 'jammed', label: 'Still jammed', desc: 'Lower it more.' },
 ]
 const totalMoved = computed(() => (['X', 'Y', 'Z'] as const).filter((a) => moved.value[a]).map((a) => `${a} ${moved.value[a] > 0 ? '+' : ''}${moved.value[a]}`).join(', '))
@@ -346,26 +346,26 @@ watch(() => state.wizardEntry, consumeEntry)
     <!-- ===================== CHECK / START ===================== -->
     <template v-if="step === 'check' && tc.status === 'changing'">
       <div class="callout info">
-        <template v-if="tool?.active"><b>An alignment of {{ label }} is in progress</b> (docking mode, {{ label }} on the carriage).</template>
-        <template v-else><b>A pickup check is in progress</b>: the empty carriage is in docking mode{{ nearTool ? ` at ${nearTool.label}'s dock` : '' }}.</template>
+        <template v-if="tool?.active"><b>An alignment of {{ label }} is in progress</b> (docking mode, {{ label }} on the gantry).</template>
+        <template v-else><b>A pickup check is in progress</b>: the empty gantry is in docking mode{{ nearTool ? ` at ${nearTool.label}'s dock` : '' }}.</template>
         Pick up where you left off, or leave the dock safely.
       </div>
       <div class="row">
         <span class="grow" />
         <button v-if="tool?.active" :disabled="busy" @click="cancel">Cancel alignment</button>
         <button v-else :disabled="busy" @click="pcAbort">Leave the dock</button>
-        <button class="primary" :disabled="busy || (!tool?.active && nearTool?.number !== n)" :title="!tool?.active && nearTool && nearTool.number !== n ? `The carriage is at ${nearTool.label}'s dock: select ${nearTool.label} above to resume` : ''" @click="step = tool?.active ? 'fit' : zRel < -0.5 ? 'pc-short' : 'pc-latch'">Resume</button>
+        <button class="primary" :disabled="busy || (!tool?.active && nearTool?.number !== n)" :title="!tool?.active && nearTool && nearTool.number !== n ? `The gantry is at ${nearTool.label}'s dock: select ${nearTool.label} above to resume` : ''" @click="step = tool?.active ? 'fit' : zRel < -0.5 ? 'pc-short' : 'pc-latch'">Resume</button>
       </div>
     </template>
 
     <template v-else-if="step === 'check'">
       <p>Two checks, in this order:</p>
       <ol class="muted list">
-        <li><b>Pickup check</b> (carriage empty, {{ label }} in its dock): the carriage comes up under {{ label }} slowly and you tell me how it lines up and latches. This finds the X/Y/Z where it really grabs the tool.</li>
-        <li><b>Dock fit</b> ({{ label }} on the carriage): it slides into the dock and you tell me how it sits. Then a real dropoff + pickup test, and save.</li>
+        <li><b>Pickup check</b> (gantry empty, {{ label }} in its dock): the gantry comes up under {{ label }} slowly and you tell me how it lines up and latches. This finds the X/Y/Z where it really grabs the tool.</li>
+        <li><b>Dock fit</b> ({{ label }} on the gantry): it slides into the dock and you tell me how it sits. Then a real dropoff + pickup test, and save.</li>
       </ol>
       <div v-if="!verifyAtEnd" class="callout warn">
-        The pickup check runs while the tool is still resting in its dock. With per-tool Tap/OptoTap probes, the dock can keep the probe reading "docked" there,
+        The pickup check runs while the tool is still resting in its dock. With per-tool Tap/OptoTap sensors, the dock keeps the sensor pressed there, so it still says "in dock",
         so good pickups get reported as failures. If a test fails but the tool latched cleanly, I'll offer to move the check to the end of the pickup path.
       </div>
       <ul v-if="blockers.length" class="blockers"><li v-for="b in blockers" :key="b">{{ b }}</li></ul>
@@ -378,14 +378,14 @@ watch(() => state.wizardEntry, consumeEntry)
 
     <template v-else-if="step === 'start'">
       <p>{{ label }} is in front of its dock. Next it slides slowly (5 mm/s, last bit 2.5 mm/s) along the dock path to the saved position
-        <span class="mono">X{{ f(tool?.park.x ?? NaN) }} Y{{ f(tool?.park.y ?? NaN) }} Z{{ f(tool?.park.z ?? NaN) }}</span> and stops there with the tool still on the carriage.</p>
+        <span class="mono">X{{ f(tool?.park.x ?? NaN) }} Y{{ f(tool?.park.y ?? NaN) }} Z{{ f(tool?.park.z ?? NaN) }}</span> and stops there with the tool still on the gantry.</p>
       <p class="muted">Keep a hand near the e-stop.</p>
       <div class="row"><span class="grow" /><button @click="cancel">Cancel</button><button class="primary" :disabled="busy" @click="enter">Slide into dock</button></div>
     </template>
 
     <!-- ===================== DOCK FIT ===================== -->
     <template v-else-if="step === 'fit'">
-      <h3>{{ label }} is at {{ totalMoved ? 'the adjusted' : 'its saved' }} dock position with the tool still on the carriage. How does it sit in the dock?</h3>
+      <h3>{{ label }} is at {{ totalMoved ? 'the adjusted' : 'its saved' }} dock position with the tool still on the gantry. How does it sit in the dock?</h3>
       <div class="options">
         <button v-for="o in fitOptions" :key="o.value" class="option" :disabled="busy" @click="answerFit(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
       </div>
@@ -418,16 +418,16 @@ watch(() => state.wizardEntry, consumeEntry)
 
     <template v-else-if="step === 'failed' && note === 'probe'">
       <div class="callout warn">
-        The tool latched cleanly, and the check already runs at the end of the pickup path where the tool hangs free, yet its probe still reads "docked".
-        That points at the probe itself: a sticking Tap/OptoTap, a dirty or misaligned optical flag, or wiring. Run <b>Detect tool</b> with {{ label }} on the carriage to see what it reads.
+        The tool latched cleanly, and the check already runs at the end of the pickup path where the tool hangs free, yet its sensor still says "in dock".
+        That points at the probe itself: a sticking Tap/OptoTap, a dirty or misaligned optical flag, or wiring. Check the live "Where each tool is" strip on the Tools tab with {{ label }} on the gantry: it should say on gantry.
       </div>
       <div class="row"><span class="grow" /><button @click="step = 'mount'">Mount it by hand and re-detect</button></div>
     </template>
 
     <template v-else-if="step === 'verifyfix'">
       <div class="callout info">
-        <b>The pickup worked; the check ran too early.</b> It runs at the moment the carriage latches, while {{ label }} is still resting in its dock,
-        and the dock holds the Tap in its "docked" state. Moving the check to the end of the pickup path (tool lifted out and hanging free) fixes the false failures.
+        <b>The pickup worked; the check ran too early.</b> It runs at the moment the gantry latches, while {{ label }} is still resting in its dock,
+        and the dock keeps its Tap sensor pressed, so it still says "in dock". Moving the check to the end of the pickup path (tool lifted out and hanging free) fixes the false failures.
       </div>
       <p class="muted">This changes <code>params_pickup_path</code> in your toolchanger config (backed up first) and applies it to all tools now, with no restart.
         Then {{ label }} is picked up again with the corrected check.</p>
@@ -435,9 +435,9 @@ watch(() => state.wizardEntry, consumeEntry)
     </template>
 
     <template v-else-if="step === 'mount'">
-      <p><b>Put {{ label }} on the carriage by hand</b>, fully seated, so the toolchanger can see it again. Careful if it was hot.</p>
+      <p><b>Put {{ label }} on the gantry by hand</b>, fully seated, so the toolchanger can see it again. Careful if it was hot.</p>
       <p class="muted">Then press the button. It re-reads all probes, with no motion and no restart.</p>
-      <div class="row"><span class="grow" /><button class="primary" :disabled="busy" @click="mounted">It's on the carriage: re-detect</button></div>
+      <div class="row"><span class="grow" /><button class="primary" :disabled="busy" @click="mounted">It's on the gantry: re-detect</button></div>
     </template>
 
     <template v-else-if="step === 'save'">
@@ -459,20 +459,20 @@ watch(() => state.wizardEntry, consumeEntry)
     <!-- ===================== PICKUP CHECK ===================== -->
     <template v-else-if="step === 'hold'">
       <div class="callout err"><b>Hold {{ label }} so it can't fall.</b> Nothing will move until you continue.</div>
-      <p>Take {{ label }} off the carriage and seat it properly back in its dock (pins fully down). Then we'll check the pickup with an empty carriage.</p>
+      <p>Take {{ label }} off the gantry and seat it properly back in its dock (pins fully down). Then we'll check the pickup with an empty gantry.</p>
       <div class="row"><span class="grow" /><button class="primary" :disabled="busy" @click="secured">{{ label }} is back in its dock</button></div>
     </template>
 
     <template v-else-if="step === 'secure'">
-      <p>The pickup itself needs adjusting. First make sure <b>{{ label }} is sitting properly in its dock</b> (not crooked or perched on the pins) and the carriage is empty.</p>
+      <p>The pickup itself needs adjusting. First make sure <b>{{ label }} is sitting properly in its dock</b> (not crooked or perched on the pins) and the gantry is empty.</p>
       <div class="row"><span class="grow" /><button class="primary" :disabled="busy" @click="secured">{{ label }} is seated in its dock</button></div>
     </template>
 
     <template v-else-if="step === 'pc-prep'">
-      <p>The empty carriage will move under {{ label }} the way a pickup does, come up slowly and <b>stop 2 mm below</b> the saved dock height
+      <p>The empty gantry will move under {{ label }} the way a pickup does, come up slowly and <b>stop 2 mm below</b> the saved dock height
         (<span class="mono">Z{{ f(parkZ - 2) }}</span>) so you can look before anything touches.</p>
       <div v-if="onCarriage" class="callout warn row">
-        <span class="grow">{{ onCarriage.label }} is on the carriage. It has to go back in its dock first.</span>
+        <span class="grow">{{ onCarriage.label }} is on the gantry. It has to go back in its dock first.</span>
         <button class="blue" :disabled="busy || !!state.busy" @click="dropOff">Drop off {{ onCarriage.label }}</button>
       </div>
       <p class="muted">Keep a hand near the e-stop.</p>
@@ -489,7 +489,7 @@ watch(() => state.wizardEntry, consumeEntry)
 
     <template v-else-if="step === 'pc-missed'">
       <div class="callout warn">
-        <b>{{ label }} didn't come out with the carriage.</b> The carriage left the dock along the pickup path, but no tool was detected on it,
+        <b>{{ label }} didn't come out with the gantry.</b> The gantry left the dock along the pickup path, but no tool was detected on it,
         so it wasn't fully latched at that position. The position you found is kept (live, not saved yet).
       </div>
       <h3>Where is {{ label }} now?</h3>
@@ -500,7 +500,7 @@ watch(() => state.wizardEntry, consumeEntry)
     </template>
 
     <template v-else-if="step === 'pc-short'">
-      <h3>The empty carriage is under {{ label }} at Z {{ f(pos.z) }} ({{ f(zRel) }} mm vs. its saved pickup height). What do you see?</h3>
+      <h3>The empty gantry is under {{ label }} at Z {{ f(pos.z) }} ({{ f(zRel) }} mm vs. its saved pickup height). What do you see?</h3>
       <div class="options">
         <button v-for="o in shortOptions" :key="o.value" class="option" :disabled="busy" @click="answerShort(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
       </div>
@@ -508,14 +508,14 @@ watch(() => state.wizardEntry, consumeEntry)
     </template>
 
     <template v-else-if="step === 'pc-up'">
-      <h3 v-if="upHint === 'up'">Press <b>Up</b> in small steps until the carriage fully latches onto {{ label }}.</h3>
-      <h3 v-else>Press <b>Down</b> in small steps until {{ label }} rests on its dock seat again (the carriage is lifting it).</h3>
+      <h3 v-if="upHint === 'up'">Press <b>Up</b> in small steps until the gantry fully latches onto {{ label }}.</h3>
+      <h3 v-else>Press <b>Down</b> in small steps until {{ label }} rests on its dock seat again (the gantry is lifting it).</h3>
       <NudgePad :tool-number="n" axes="Z" :initial-step="0.25" @moved="onMoved" />
       <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = upFrom">Check again</button></div>
     </template>
 
     <template v-else-if="step === 'pc-latch'">
-      <h3>Now at Z {{ f(pos.z) }} ({{ zRel >= 0 ? '+' : '' }}{{ f(zRel) }} mm vs. saved). Is the carriage fully latched onto {{ label }}?</h3>
+      <h3>Now at Z {{ f(pos.z) }} ({{ zRel >= 0 ? '+' : '' }}{{ f(zRel) }} mm vs. saved). Is the gantry fully latched onto {{ label }}?</h3>
       <div class="options">
         <button v-for="o in latchOptions" :key="o.value" class="option" :disabled="busy" @click="answerLatch(o.value)"><b>{{ o.label }}</b><span>{{ o.desc }}</span></button>
       </div>
@@ -536,7 +536,7 @@ watch(() => state.wizardEntry, consumeEntry)
     </template>
 
     <template v-else-if="step === 'pc-align'">
-      <h3>Line the carriage up under {{ label }}'s mount: move it the way it needs to go, as seen standing at the front of the printer.</h3>
+      <h3>Line the gantry up under {{ label }}'s mount: move it the way it needs to go, as seen standing at the front of the printer.</h3>
       <p class="hint">Nothing is touching at this height, so sideways moves are safe. Each move is confirmed below.</p>
       <NudgePad :tool-number="n" axes="XY" :initial-step="0.25" @moved="onMoved" />
       <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="step = 'pc-short'">Check again</button></div>
@@ -544,7 +544,7 @@ watch(() => state.wizardEntry, consumeEntry)
 
     <template v-else-if="step === 'pc-done'">
       <div class="callout ok"><b>{{ label }} picked up and verified.</b> {{ note }}</div>
-      <p>Next: check how {{ label }} sits in its dock with the tool on the carriage, then test a real dropoff and pickup.</p>
+      <p>Next: check how {{ label }} sits in its dock with the tool on the gantry, then test a real dropoff and pickup.</p>
       <div class="row"><span class="grow" /><button class="primary" :disabled="busy || !!state.busy" @click="begin">Continue: dock fit</button></div>
     </template>
 

@@ -24,7 +24,8 @@ export interface ToolInfo {
   offset: Xyz
   probeName: string | null
   probeZOffset: number | null
-  probeState: 'open' | 'docked' | 'unknown' // from the last DETECT query
+  probeState: 'open' | 'docked' | 'unknown' // raw sensor: open = released, docked = pressed (triggered)
+  where: 'gantry' | 'dock' | 'unknown' // what the sensor means, for display
   fan: string | null
   shaper: { x: string; fx: number; y: string; fy: number }
   mcu: McuInfo | null
@@ -98,7 +99,7 @@ export function buildTools(status: Status): ToolInfo[] {
     })
     if (!isNaN(park.y) && typeof t.params_safe_y === 'number') {
       const approach = Math.max(0, ...((t.params_pickup_path as any[] | undefined) ?? []).map((p) => p.y ?? 0))
-      if (t.params_safe_y < park.y + approach + 10) warnings.push(`Safe Y ${t.params_safe_y} is too close to the dock (park Y ${park.y}); the carriage would move sideways next to the docks`)
+      if (t.params_safe_y < park.y + approach + 10) warnings.push(`Safe Y ${t.params_safe_y} is too close to the dock (park Y ${park.y}); the gantry would move sideways next to the docks`)
     }
     const path = t.params_pickup_path as any[] | undefined
     if (!path?.length) warnings.push('No pickup path configured')
@@ -122,6 +123,7 @@ export function buildTools(status: Status): ToolInfo[] {
       probeName: probeCfg ? probeName : null,
       probeZOffset: num(probeCfg?.z_offset),
       probeState: q === undefined ? 'unknown' : q ? 'docked' : 'open',
+      where: q === undefined ? 'unknown' : q ? 'dock' : 'gantry',
       fan: t.fan ?? null,
       shaper: {
         x: t.params_input_shaper_type_x ?? '',
