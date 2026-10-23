@@ -14,7 +14,7 @@ import { configIndex, detectTools, homed, isPrinting, run, safety, state, status
 const props = defineProps<{ toolNumber: number }>()
 
 type Step =
-  | 'check' | 'start' | 'fit' | 'adjust' | 'test' | 'failed' | 'mount' | 'verifyfix' | 'save' | 'done'
+  | 'check' | 'teach' | 'teach-recorded' | 'start' | 'fit' | 'adjust' | 'test' | 'failed' | 'mount' | 'verifyfix' | 'save' | 'done'
   | 'secure' | 'hold' | 'pc-prep' | 'pc-short' | 'pc-latch' | 'pc-free' | 'pc-freed' | 'pc-align' | 'pc-up' | 'pc-done' | 'pc-missed'
 type Axis = 'X' | 'Y' | 'Z'
 interface Option { label: string; desc: string; value: string }
@@ -61,14 +61,19 @@ const parkZ = computed(() => Number(raw.value.params_park_z))
 const zRel = computed(() => pos.value.z - parkZ.value)
 const f = (v: number, d = 2) => (isNaN(v) ? '-' : v.toFixed(d))
 
-const blockers = computed(() => {
+const baseBlockers = computed(() => {
   const out: string[] = []
   if (!safety.value) out.push('toolchanger-safety.cfg is not loaded')
   if (homed.value !== 'xyz') out.push('Home the printer first')
   if (isPrinting.value) out.push('A print is running')
-  if (tool.value?.warnings.length) out.push(...tool.value.warnings)
   return out
 })
+// Flows that move to the saved dock position also need that position to be valid
+const blockers = computed(() => [...baseBlockers.value, ...(tool.value?.warnings ?? [])])
+const parkValid = computed(() => !!tool.value && tool.value.warnings.length === 0)
+const onGantryHere = computed(() => !!tool.value?.active && tool.value.where !== 'dock')
+const canTeach = computed(() => baseBlockers.value.length === 0 && onGantryHere.value)
+const safeY = computed(() => Number(tc.value.params_safe_y ?? 120))
 
 // Moonraker pushes status ~4x a second; let it catch up after a command.
 const settle = () => new Promise((r) => setTimeout(r, 600))
@@ -92,6 +97,63 @@ async function savePark(x: number, y: number, z: number) {
     ([['x', x], ['y', y], ['z', z]] as const).map(([a, v]) => ({ section: tool.value!.name, key: `params_park_${a}`, value: String(v) })),
   )
   return `Saved ${label.value}'s dock position X${x} Y${y} Z${z} to ${files.join(', ')}. No restart needed.`
+}
+
+// ============ Teach by drop-off (tool on the gantry, free jog) ============
+async function teachStart() {
+  await act(async () => {
+    if (!['ready', 'changing'].includes(tc.value.status)) {
+      await run('TC_RECOVER', 'Re-detect')
+      await settle()
+    }
+    if (!tools.value.find((t) => t.number === n.value)?.active) {
+      throw new Error(`${label.value} is not on the gantry. Put it on by hand and press Detect tool.`)
+    }
+    // Docking mode: raw toolhead coordinates (no tool offsets) and no T commands
+    if (tc.value.status !== 'changing') await run('ENTER_DOCKING_MODE', 'Docking mode (no motion)')
+    // Dock moves during the first test run slowly
+    await run(`SET_TOOL_PARAMETER T=${n.value} PARAMETER=params_path_speed VALUE=300`, 'Slow dock moves')
+    await settle()
+    moved.value = { X: 0, Y: 0, Z: 0 }
+  }, 'teach')
+}
+async function teachSafeY() {
+  await act(() => run(`G90\nG0 Y${safeY.value} F3000\nM400`, 'Go to safe Y'))
+}
+async function teachNearSaved() {
+  const t = tool.value!
+  const entryZ = t.park.z + 4
+  await act(() =>
+    run(`G90\nG0 Y${safeY.value} F3000\nG0 X${t.park.x} Z${entryZ} F3000\nG0 Y${Math.min(t.park.y + 30, safeY.value)} F3000\nM400`, 'In front of the saved dock'),
+  )
+}
+async function teachRecord() {
+  const x = +pos.value.x.toFixed(2)
+  const y = +pos.value.y.toFixed(2)
+  const z = +pos.value.z.toFixed(2)
+  if (!confirm(`Record X${x} Y${y} Z${z} as ${label.value}'s dock position?\n\nIt's applied now. It is written to the config file only after the test passes.`)) return
+  await act(async () => {
+    for (const [a, v] of [['x', x], ['y', y], ['z', z]] as const) {
+      await run(`SET_TOOL_PARAMETER T=${n.value} PARAMETER=params_park_${a} VALUE=${v}`, `Set ${label.value} dock ${a.toUpperCase()}`)
+    }
+    await settle()
+  }, 'teach-recorded')
+}
+async function teachLeave() {
+  await act(async () => {
+    await run(`RESET_TOOL_PARAMETER T=${n.value} PARAMETER=params_path_speed`, 'Normal dock speed')
+    await run('_TC_REAPPLY_TEST_SPEED', 'Keep test mode speed')
+    if (tc.value.status === 'changing') await run('EXIT_DOCKING_MODE', 'Leave docking mode (no motion)')
+  }, 'check')
+}
+async function quickDrop() {
+  await act(() => run('UNSELECT_TOOL RESTORE_AXIS=', `Drop off ${onCarriage.value?.label ?? label.value}`))
+}
+async function quickPick() {
+  await act(async () => {
+    await run(`T${n.value}`, `Pick up ${label.value}`)
+    await settle()
+  })
 }
 
 // ======================= Dock fit (tool on the gantry) =======================
@@ -353,26 +415,77 @@ watch(() => state.wizardEntry, consumeEntry)
       <div class="row">
         <span class="grow" />
         <button v-if="tool?.active" :disabled="busy" @click="cancel">Cancel alignment</button>
+        <button v-if="tool?.active" :disabled="busy" @click="step = 'teach'">Resume teaching (move pad)</button>
         <button v-else :disabled="busy" @click="pcAbort">Leave the dock</button>
         <button class="primary" :disabled="busy || (!tool?.active && nearTool?.number !== n)" :title="!tool?.active && nearTool && nearTool.number !== n ? `The gantry is at ${nearTool.label}'s dock: select ${nearTool.label} above to resume` : ''" @click="step = tool?.active ? 'fit' : zRel < -0.5 ? 'pc-short' : 'pc-latch'">Resume</button>
       </div>
     </template>
 
     <template v-else-if="step === 'check'">
-      <p>Two checks, in this order:</p>
-      <ol class="muted list">
-        <li><b>Pickup check</b> (gantry empty, {{ label }} in its dock): the gantry comes up under {{ label }} slowly and you tell me how it lines up and latches. This finds the X/Y/Z where it really grabs the tool.</li>
-        <li><b>Dock fit</b> ({{ label }} on the gantry): it slides into the dock and you tell me how it sits. Then a real dropoff + pickup test, and save.</li>
-      </ol>
+      <h3>Where do you want to start?</h3>
+      <div class="options three">
+        <button class="option" :disabled="busy || !!state.busy || !canTeach" @click="teachStart">
+          <b>{{ label }} is on the gantry: teach by dropping it off</b>
+          <span>Drive {{ label }} into its dock with the move pad until it sits down on the pins, record that, then test a real drop-off and pick-up. Works even if the saved position is wrong.</span>
+        </button>
+        <button class="option" :disabled="busy || !!state.busy || baseBlockers.length > 0" @click="step = 'pc-prep'">
+          <b>{{ label }} is in its dock: pickup check</b>
+          <span>The empty gantry comes up under {{ label }} slowly and you tell me how it lines up and latches. Finds where it really grabs the tool.</span>
+        </button>
+        <button class="option" :disabled="busy || !!state.busy || blockers.length > 0" @click="begin">
+          <b>Check the saved position</b>
+          <span>{{ tool?.active ? 'Slides' : `Picks up ${label}, then slides` }} it into its saved dock position so you can see how it sits, then tests a real drop-off and pick-up.</span>
+        </button>
+      </div>
+      <div class="row">
+        <span class="muted">Right now: {{ onGantryHere ? `${label} is on the gantry.` : onCarriage ? `${onCarriage.label} is on the gantry.` : 'the gantry is empty.' }}</span>
+        <span class="grow" />
+        <button v-if="onCarriage && !onCarriage.warnings.length" :disabled="busy || !!state.busy || baseBlockers.length > 0" @click="quickDrop">Drop off {{ onCarriage.label }}</button>
+        <button v-if="!onGantryHere && parkValid" class="blue" :disabled="busy || !!state.busy || baseBlockers.length > 0" @click="quickPick">Pick up {{ label }}</button>
+        <button :disabled="busy || !!state.busy" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
+      </div>
+      <p v-if="!onGantryHere && !parkValid" class="hint">
+        {{ label }}'s saved dock position isn't valid yet, so it can't be picked up automatically. To teach by drop-off, put {{ label }} on the gantry by hand and press <b>Detect tool</b>.
+      </p>
+      <ul v-if="baseBlockers.length" class="blockers"><li v-for="b in baseBlockers" :key="b">{{ b }}</li></ul>
       <div v-if="!verifyAtEnd" class="callout warn">
         The pickup check runs while the tool is still resting in its dock. With per-tool Tap/OptoTap sensors, the dock keeps the sensor pressed there, so it still says "in dock",
         so good pickups get reported as failures. If a test fails but the tool latched cleanly, I'll offer to move the check to the end of the pickup path.
       </div>
-      <ul v-if="blockers.length" class="blockers"><li v-for="b in blockers" :key="b">{{ b }}</li></ul>
+    </template>
+
+    <!-- ===================== TEACH BY DROP-OFF ===================== -->
+    <template v-else-if="step === 'teach'">
+      <h3>Bring {{ label }} into its dock with the pad until it sits fully down on the dock pins, the way it should rest after a drop-off.</h3>
+      <ol class="muted list">
+        <li>Go to safe Y, then move X until {{ label }} is in line with its dock.</li>
+        <li>Set Z so the tool is a little above the dock (big steps), then move toward the dock in small steps.</li>
+        <li>Lower it until it drops onto the pins and sits flat. Stop there; don't press it down.</li>
+      </ol>
       <div class="row">
+        <button :disabled="busy || !!state.busy" @click="teachSafeY">Go to safe Y ({{ safeY }})</button>
+        <button v-if="parkValid" :disabled="busy || !!state.busy" @click="teachNearSaved">Go in front of the saved dock</button>
+        <span v-if="parkValid && tool" class="muted mono small">saved: X{{ f(tool.park.x) }} Y{{ f(tool.park.y) }} Z{{ f(tool.park.z) }}</span>
+      </div>
+      <NudgePad free :tool-number="n" :initial-step="5" @moved="onMoved" />
+      <div class="row">
+        <button class="ghost" :disabled="busy || !!state.busy" title="Leaves docking mode without moving. Move the tool out of the dock first if it's in it." @click="teachLeave">Stop (no motion)</button>
         <span class="grow" />
-        <button :disabled="busy || !!state.busy || blockers.length > 0" @click="step = 'pc-prep'">1 · Pickup check</button>
-        <button class="primary" :disabled="busy || !!state.busy || blockers.length > 0" @click="begin">2 · {{ tool?.active ? 'Dock fit' : `Pick up ${label}, dock fit` }}</button>
+        <button class="primary" :disabled="busy || !!state.busy" @click="teachRecord">It's seated: record this position</button>
+      </div>
+    </template>
+
+    <template v-else-if="step === 'teach-recorded'">
+      <div class="callout ok"><b>Recorded {{ label }}'s dock at X{{ raw.params_park_x }} Y{{ raw.params_park_y }} Z{{ raw.params_park_z }}</b> (active now, saved to the file after the test passes).</div>
+      <div v-if="tool?.warnings.length" class="callout warn">
+        Fix these before testing: <span v-for="w in tool.warnings" :key="w">{{ w }}. </span>
+        <span v-if="tool.warnings.some((w) => w.startsWith('Safe Y'))">Set Safe Y with the tool's <b>Edit</b> button on the Tools tab (applies immediately).</span>
+      </div>
+      <p>Next, a real test from this position: {{ label }} leaves the dock along the pickup path, does a full drop-off, picks itself up again, and the sensors are checked. Dock moves run slowly.</p>
+      <div class="row">
+        <button :disabled="busy" @click="step = 'teach'">Keep adjusting</button>
+        <span class="grow" />
+        <button class="primary" :disabled="busy || !!state.busy || !!tool?.warnings.length" @click="test">Test from here</button>
       </div>
     </template>
 
@@ -566,4 +679,6 @@ h3 { font-size: 14.5px; line-height: 1.4; }
 .hint b { color: var(--text); }
 .blockers { margin: 0; padding-left: 20px; color: var(--warn); }
 .list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.options.three { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.small { font-size: 12.5px; }
 </style>

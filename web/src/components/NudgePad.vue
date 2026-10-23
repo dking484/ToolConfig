@@ -4,10 +4,23 @@
 import { computed, ref } from 'vue'
 import { run, state, status } from '../store'
 
-const props = withDefaults(defineProps<{ toolNumber: number; axes?: string; initialStep?: number }>(), { axes: 'XYZ', initialStep: 0.5 })
+// free: plain relative moves with coarse steps too (teaching a dock from scratch,
+// where the saved dock position may be far off); otherwise TC_ALIGN_NUDGE, which
+// stays within 15 mm of the saved dock and moves slowly.
+const props = withDefaults(defineProps<{ toolNumber: number; axes?: string; initialStep?: number; free?: boolean }>(), {
+  axes: 'XYZ',
+  initialStep: 0.5,
+  free: false,
+})
 const emit = defineEmits<{ moved: [axis: 'X' | 'Y' | 'Z', dist: number] }>()
 
-const steps = [0.1, 0.25, 0.5, 1, 2]
+const steps = props.free ? [0.1, 0.25, 0.5, 1, 5, 10, 25] : [0.1, 0.25, 0.5, 1, 2]
+
+function freeMove(axis: 'X' | 'Y' | 'Z', d: number) {
+  const s = Math.abs(d)
+  const feed = axis === 'Z' ? (s >= 5 ? 600 : s >= 1 ? 300 : 120) : s >= 10 ? 3000 : s >= 1 ? 1200 : 300
+  return `G91\nG0 ${axis}${d} F${feed}\nG90\nM400`
+}
 const step = ref(props.initialStep)
 const busy = ref(false)
 const last = ref<{ ok: boolean; text: string } | null>(null)
@@ -30,7 +43,8 @@ async function move(axis: 'X' | 'Y' | 'Z', sign: 1 | -1) {
   busy.value = true
   last.value = null
   try {
-    await run(`TC_ALIGN_NUDGE T=${props.toolNumber} AXIS=${axis} DIST=${d}`, `Move ${axis}${d > 0 ? '+' : ''}${d}`)
+    const script = props.free ? freeMove(axis, d) : `TC_ALIGN_NUDGE T=${props.toolNumber} AXIS=${axis} DIST=${d}`
+    await run(script, `Move ${axis}${d > 0 ? '+' : ''}${d}`)
     // let the status catch up so the readout shows the new position
     await new Promise((r) => setTimeout(r, 400))
     last.value = {
