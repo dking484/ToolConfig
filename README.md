@@ -58,7 +58,7 @@ Open it at `http://<printer>/toolconfig/`, or from **ToolConfig** in Mainsail's 
 On the printer (as `pi`):
 
 ```bash
-git clone https://github.com/<you>/ToolConfig.git ~/ToolConfig
+git clone https://github.com/dking484/ToolConfig.git ~/ToolConfig
 ~/ToolConfig/deploy/install-on-printer.sh
 sudo systemctl restart klipper
 ```
