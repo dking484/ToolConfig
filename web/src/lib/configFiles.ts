@@ -114,7 +114,7 @@ export class ConfigIndex {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     for (const { file, text } of byFile.values()) {
       if (text === file.text) continue
-      await this.mr.upload('config', `toolchanger-ui-backups/${file.path.replace(/\//g, '__')}.${stamp}.bak`, file.text)
+      await this.mr.upload('config', `toolconfig-backups/${file.path.replace(/\//g, '__')}.${stamp}.bak`, file.text)
       await this.mr.upload('config', file.path, text)
     }
     await this.load()

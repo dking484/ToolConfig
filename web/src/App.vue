@@ -36,7 +36,7 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
   <header class="top">
     <div class="row brand">
       <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--accent)" d="M7,2H17V8H19V13H16.5L13,17H11L7.5,13H5V8H7V2M10,22H2V20H10A1,1 0 0,0 11,19V18H13V19A3,3 0 0,1 10,22Z"/></svg>
-      <h1>Tool Changer</h1>
+      <h1>ToolConfig</h1>
       <span class="grow" />
       <button
         class="estop"

@@ -106,7 +106,7 @@ async function save() {
   if (!changed.value.length || invalid.value.length || blocked.value.length) return
   const list = changed.value.map((f) => `${f.label}: ${original[id(f)] || '(unset)'} → ${values[id(f)]}   [${info[id(f)].file}]`).join('\n')
   const restartNote = needsRestart.value.length ? `\n\nNeeds a Klipper restart to take effect: ${needsRestart.value.map((f) => f.label).join(', ')}` : ''
-  if (!confirm(`Save these changes to ${t.label}?\n\n${list}${restartNote}\n\nA backup of each file is written to config/toolchanger-ui-backups/.`)) return
+  if (!confirm(`Save these changes to ${t.label}?\n\n${list}${restartNote}\n\nA backup of each file is written to config/toolconfig-backups/.`)) return
   saving.value = true
   error.value = ''
   try {

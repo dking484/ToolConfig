@@ -58,7 +58,7 @@ export class Moonraker {
       this.emit('connection', 'open')
       try {
         await this.call('server.connection.identify', {
-          client_name: 'klipper-toolchanger-ui',
+          client_name: 'ToolConfig',
           version: '0.1.0',
           type: 'web',
           url: 'https://github.com/',

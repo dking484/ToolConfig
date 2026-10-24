@@ -1,4 +1,4 @@
-# Helpers for klipper-toolchanger-ui
+# Helpers for ToolConfig
 #
 # Adds what the macros in toolchanger-safety.cfg cannot do on their own:
 #  - TC_CLEAR_ACTIVE_TOOL: forget the "active" tool without any motion, used

@@ -1,11 +1,11 @@
-# klipper-toolchanger-ui
+# ToolConfig
 
 A tool-changer page that sits next to Mainsail, plus Klipper macros that make
 tool-change failures recoverable. Built for a Voron 2.4 StealthChanger running
 [klipper-toolchanger-easy](https://github.com/jwellman80/klipper-toolchanger-easy)
 with per-tool OptoTap probes, but nothing is specific to one printer.
 
-Open it at `http://<printer>/toolchanger/`, or from **Tool Changer** in Mainsail's sidebar.
+Open it at `http://<printer>/toolconfig/`, or from **ToolConfig** in Mainsail's sidebar.
 
 ## What it does
 
@@ -39,7 +39,7 @@ Open it at `http://<printer>/toolchanger/`, or from **Tool Changer** in Mainsail
   (e.g. dock positions outside the axis range).
 - **Edit**: change any of those. Values are written to the file Klipper reads
   them from (following `[include]` order), comments are kept, a backup goes to
-  `config/toolchanger-ui-backups/`, and the value is applied live where Klipper
+  `config/toolconfig-backups/`, and the value is applied live where Klipper
   allows (dock position, offsets, pressure advance, rotation distance, shaper).
 - **Dock test & align**: pre-flight checks, test mode, repeated dock cycles
   with pass/fail counters, guided alignment with a fine jog pad, save the new
@@ -58,8 +58,8 @@ Open it at `http://<printer>/toolchanger/`, or from **Tool Changer** in Mainsail
 On the printer (as `pi`):
 
 ```bash
-git clone <this repo> ~/klipper-toolchanger-ui
-~/klipper-toolchanger-ui/deploy/install-on-printer.sh
+git clone https://github.com/<you>/ToolConfig.git ~/ToolConfig
+~/ToolConfig/deploy/install-on-printer.sh
 sudo systemctl restart klipper
 ```
 
@@ -70,7 +70,7 @@ The built web app is committed in `web/dist`, so the printer needs no Node.
 ```bash
 cd web
 npm install
-npm run dev     # http://localhost:5180/toolchanger/ proxied to $PRINTER_URL (default http://voron.local)
+npm run dev     # http://localhost:5180/toolconfig/ proxied to $PRINTER_URL (default http://voron.local)
 npm test        # config editor + G-code checker unit tests
 ```
 
