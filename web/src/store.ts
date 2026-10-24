@@ -158,6 +158,20 @@ export async function runWithTool(script: string, label: string) {
   return false
 }
 
+/**
+ * Emergency stop through Moonraker's endpoint, which bypasses the G-code queue
+ * (an M112 sent as G-code would wait behind a running command).
+ */
+export async function emergencyStop() {
+  log('EMERGENCY STOP', 'cmd')
+  try {
+    await mr.call('printer.emergency_stop', undefined, 3000)
+  } catch {
+    // Older Moonraker / odd state: fall back to M112 (Klipper handles it out of band)
+    await mr.gcode('M112').catch(() => undefined)
+  }
+}
+
 export async function firmwareRestart() {
   state.pendingRestart = []
   await mr.call('printer.firmware_restart')
