@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Home Assistant style editor for one tool's config file: a visual editor
+// Editor for one tool's config file: a visual editor
 // (a card per section, labelled fields) and a code editor (the raw file).
 // Both edit the same text; switching views never loses anything.
 import { computed, onMounted, ref } from 'vue'

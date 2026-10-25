@@ -82,7 +82,7 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 - **Tools**: every tool with dock position, offsets, nozzle, probe offset,
   input shaper, CAN/USB board and firmware, live temps, and sanity warnings
   (e.g. dock positions outside the axis range).
-- **Edit a tool's whole config** (Home Assistant style): a **Visual editor**
+- **Edit a tool's whole config**: a **Visual editor**
   with a card per section (board, extruder, driver, fans, LEDs, tool, probe,
   accelerometer, macro; unknown keys too) and a **Code editor** with the raw
   `Tn.cfg`. Both edit the same text. Save shows the changes, backs the file up,
