@@ -1,0 +1,4 @@
+# Everything here runs on Linux (Klipper, nginx, bash): always LF
+* text=auto eol=lf
+*.png binary
+*.ico binary
