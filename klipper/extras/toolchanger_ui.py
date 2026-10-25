@@ -5,6 +5,10 @@
 #    after a failed pickup left the toolchanger pointing at a tool that is
 #    not actually on the carriage.
 #  - TC_DETECT: read every tool sensor now, whichever kind the printer has.
+#  - Probe heat cooldown: easy's _TAP_PROBE_ACTIVATE heats the nozzle to
+#    150C before every Tap probe and never turns it off, so outside a print a
+#    tool stays hot until idle_timeout. Heat it only turned on is turned back
+#    off probe_heat_off_delay seconds after probing ends.
 #  - printer.toolchanger_ui status: the toolchanger's error message, which
 #    klipper-toolchanger does not publish itself, and one view of the tool
 #    sensors for the macros and the web page.
@@ -42,6 +46,16 @@ class ToolchangerUI:
         self.toolchanger = None
         self.printer.register_event_handler('klippy:connect',
                                             self._handle_connect)
+        self.printer.register_event_handler('klippy:ready',
+                                            self._handle_ready)
+        self.reactor = self.printer.get_reactor()
+        # heater name -> target that _TAP_PROBE_ACTIVATE set on a cold heater
+        self.probe_heated = {}
+        self.probe_heat_off_delay = config.getfloat(
+            'probe_heat_off_delay', 120., minval=0.)
+        self.probe_heat_wait = False
+        self.probe_heat_timer = self.reactor.register_timer(
+            self._probe_heat_timer)
         self.gcode.register_command(
             'TC_CLEAR_ACTIVE_TOOL', self.cmd_TC_CLEAR_ACTIVE_TOOL,
             desc=self.cmd_TC_CLEAR_ACTIVE_TOOL_help)
@@ -75,6 +89,71 @@ class ToolchangerUI:
 
     def _handle_connect(self):
         self.toolchanger = self.printer.lookup_object('toolchanger')
+
+    def _handle_ready(self):
+        # Wrap whatever _TAP_PROBE_ACTIVATE the printer has. Upstream's
+        # version never heats, so then nothing is ever recorded.
+        if not self.probe_heat_off_delay:
+            return
+        name = '_TAP_PROBE_ACTIVATE'
+        orig = self.gcode.register_command(name, None)
+        if orig is None:
+            return
+        desc = getattr(self.gcode, 'gcode_help', {}).get(name)
+        def wrapped(gcmd):
+            self._probe_activate(orig, gcmd)
+        self.gcode.register_command(name, wrapped, desc=desc)
+
+    def _is_printing(self, eventtime):
+        ps = self.printer.lookup_object('print_stats', None)
+        return ps is not None and ps.get_status(eventtime)['state'] in (
+            'printing', 'paused')
+
+    def _heater_target(self, name, eventtime):
+        try:
+            heater = self.printer.lookup_object('heaters').lookup_heater(name)
+        except Exception:
+            return None
+        return heater.get_status(eventtime)['target']
+
+    def _probe_activate(self, orig, gcmd):
+        heater = gcmd.get('HEATER', None)
+        before = self._heater_target(heater, self.reactor.monotonic())
+        orig(gcmd)
+        now = self.reactor.monotonic()
+        if self._is_printing(now):
+            return
+        after = self._heater_target(heater, now)
+        if before == 0. and after:
+            self.probe_heated[heater] = after
+        if self.probe_heated:
+            # Count down only once probing (and anything else) has finished
+            self.probe_heat_wait = True
+            self.reactor.update_timer(self.probe_heat_timer, now + 5.)
+
+    def _probe_heat_timer(self, eventtime):
+        if self._is_printing(eventtime):
+            # A print owns the temperatures now
+            self.probe_heated.clear()
+            return self.reactor.NEVER
+        idle = self.printer.lookup_object('idle_timeout', None)
+        busy = (idle is not None
+                and idle.get_status(eventtime)['state'] == 'Printing')
+        if busy or self.gcode.get_mutex().test():
+            self.probe_heat_wait = True
+            return eventtime + 5.
+        if self.probe_heat_wait:
+            self.probe_heat_wait = False
+            return eventtime + self.probe_heat_off_delay
+        heated, self.probe_heated = self.probe_heated, {}
+        for heater, temp in heated.items():
+            # Leave a temperature someone set since then alone
+            if self._heater_target(heater, eventtime) == temp:
+                self.gcode.run_script(
+                    "SET_HEATER_TEMPERATURE HEATER=%s TARGET=0\n"
+                    "RESPOND MSG=\"%s turned off (only heated for probing)\""
+                    % (heater, heater))
+        return self.reactor.NEVER
 
     def _tools(self):
         tc = self.toolchanger

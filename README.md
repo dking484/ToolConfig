@@ -58,6 +58,12 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
   turned off and the print pauses).
 - An empty carriage is allowed (`require_tool_present: False`), so
   `TC_RETRY_PICKUP T=n` can recover without a restart.
+- Probe heat is turned back off. easy's `_TAP_PROBE_ACTIVATE` heats the nozzle
+  to 150 °C before each Tap probe and leaves it on, so outside a print a tool
+  stayed hot until the 30-minute idle timeout (and could be docked hot). Now
+  heat that only probing turned on goes off 2 minutes after homing/QGL finish
+  (`probe_heat_off_delay` under `[toolchanger_ui]`). Never during a print, and
+  a temperature you set yourself is left alone.
 - `RESUME` re-detects the tool, then runs Mainsail's normal resume. The stock
   toolchanger `RESUME` skipped Mainsail's un-retract and temperature restore.
 - `TOOL_ALIGN_*` fixed: works with docks at Y > 0, enters docking mode, uses
