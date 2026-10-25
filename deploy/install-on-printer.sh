@@ -5,6 +5,8 @@
 #  - links the Klipper helper module into klippy/extras
 #  - links toolchanger-safety.cfg into the toolchanger config folder
 #  - adds the [include] after the toolchanger include in printer.cfg
+#    (klipper-toolchanger-easy; with viesturz/klipper-toolchanger it prints
+#    where to add it)
 #  - serves the web app at /toolconfig/ through Mainsail's nginx site
 #  - adds a "ToolConfig" link to Mainsail's sidebar (.theme/navi.json)
 set -euo pipefail
@@ -19,9 +21,16 @@ grep -qx 'klippy/extras/toolchanger_ui.py' "$KLIPPER/.git/info/exclude" || echo 
 
 mkdir -p "$CONFIG/toolchanger"
 ln -sfn "$REPO/klipper/toolchanger-safety.cfg" "$CONFIG/toolchanger/toolchanger-safety.cfg"
+INCLUDE_NOTE=""
 if ! grep -q 'toolchanger/toolchanger-safety.cfg' "$CONFIG/printer.cfg"; then
-  cp "$CONFIG/printer.cfg" "$CONFIG/printer.cfg.before-toolconfig"
-  sed -i 's#^\[include toolchanger/readonly-configs/toolchanger-include.cfg\]#&\n[include toolchanger/toolchanger-safety.cfg]  \# ToolConfig: safe failures + test mode#' "$CONFIG/printer.cfg"
+  if grep -q '^\[include toolchanger/readonly-configs/toolchanger-include.cfg\]' "$CONFIG/printer.cfg"; then
+    # klipper-toolchanger-easy: right after its include
+    cp "$CONFIG/printer.cfg" "$CONFIG/printer.cfg.before-toolconfig"
+    sed -i 's#^\[include toolchanger/readonly-configs/toolchanger-include.cfg\]#&\n[include toolchanger/toolchanger-safety.cfg]  \# ToolConfig: safe failures + test mode#' "$CONFIG/printer.cfg"
+  else
+    # viesturz/klipper-toolchanger: layouts vary too much to place it safely
+    INCLUDE_NOTE="Add  [include toolchanger/toolchanger-safety.cfg]  to printer.cfg AFTER your toolchanger and tool includes (it overrides some of their settings)."
+  fi
 fi
 
 mkdir -p "$CONFIG/.theme"
@@ -40,4 +49,5 @@ if ! sudo grep -q toolconfig.conf "$NGINX_SITE"; then
 fi
 sudo nginx -t && sudo systemctl reload nginx
 
+[[ -z "$INCLUDE_NOTE" ]] || echo "$INCLUDE_NOTE"
 echo "Installed. Restart Klipper (sudo systemctl restart klipper) while the printer is idle."

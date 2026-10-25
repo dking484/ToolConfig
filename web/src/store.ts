@@ -160,19 +160,21 @@ export interface ToolPrompt {
 }
 export const toolPrompt = shallowRef<ToolPrompt | null>(null)
 
-/** Fresh probe read (not the cached status), returns open (= on gantry) tools. */
+/** Fresh sensor read (not the cached status), returns tools on the gantry. */
 export async function detectTools(): Promise<number[]> {
-  await mr.gcode('DETECT_ACTIVE_TOOL_PROBE')
-  const res = await mr.call('printer.objects.query', { objects: { tool_probe_endstop: ['last_tools_query'] } })
-  const q: Record<string, number> = res.status.tool_probe_endstop?.last_tools_query ?? {}
+  await mr.gcode('TC_DETECT')
+  const res = await mr.call('printer.objects.query', { objects: { toolchanger_ui: ['probes'] } })
+  const q: Record<string, boolean> = res.status.toolchanger_ui?.probes ?? {}
   return Object.entries(q)
-    .filter(([, triggered]) => !triggered)
+    .filter(([, docked]) => !docked)
     .map(([n]) => Number(n))
 }
 
 /** Run `script` only if exactly one tool is on the gantry; otherwise ask. */
 export async function runWithTool(script: string, label: string) {
-  log('DETECT_ACTIVE_TOOL_PROBE', 'cmd')
+  // Without tool sensors there is nothing to check
+  if (status.value.toolchanger_ui?.sensors === 'none') return tryRun(script, label)
+  log('TC_DETECT', 'cmd')
   state.busy = 'Checking for a tool on the gantry'
   let open: number[]
   try {

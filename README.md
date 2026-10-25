@@ -1,11 +1,50 @@
 # ToolConfig
 
 A tool-changer page that sits next to Mainsail, plus Klipper macros that make
-tool-change failures recoverable. Built for a Voron 2.4 StealthChanger running
+tool-change failures recoverable. Works with
 [klipper-toolchanger-easy](https://github.com/jwellman80/klipper-toolchanger-easy)
-with per-tool OptoTap probes, but nothing is specific to one printer.
+and with the regular [klipper-toolchanger](https://github.com/viesturz/klipper-toolchanger)
+(see [Compatibility](#compatibility)). Built on a Voron 2.4 StealthChanger with
+per-tool OptoTap probes, but nothing is specific to one printer.
 
 Open it at `http://<printer>/toolconfig/`, or from **ToolConfig** in Mainsail's sidebar.
+
+## Compatibility
+
+| | klipper-toolchanger-easy | klipper-toolchanger (viesturz) |
+|---|---|---|
+| Web page, tool editor, dock test & align, slicer check | Yes | Yes |
+| Safe failures, test mode, recovery commands | Yes | Yes |
+| Live "on gantry / in dock" sensor states | Per-tool probes | Per-tool probes (`[tool_probe_endstop]` setup) or `detection_pin` |
+| Failed-pickup detection | `VERIFY_TOOL_DETECTED` + probes | `VERIFY_TOOL_DETECTED`, needs `detection_pin` on every tool |
+| `M112` on a failed pickup replaced | Yes (easy's `_STOP_IF_INCORRECT_TOOL`) | Not needed: upstream never runs `M112` |
+| Install script adds the `[include]` | Yes | Prints where to add it |
+| Tested on real hardware | Yes | Checked against the code (upstream `94756df`, April 2026), not run on a printer yet |
+
+How it copes with the differences:
+- **Tool sensors.** easy's probes carry `tool`, upstream's carry `tool_number`.
+  Upstream can also own the probes inside `[toolchanger]` (`tool_probe:` in each
+  `[tool]`), with no `[tool_probe_endstop]` object and no
+  `DETECT_ACTIVE_TOOL_PROBE` command. `toolchanger_ui.py` reads whichever setup
+  is there and publishes one view (`printer.toolchanger_ui.probes`,
+  `detected_tool`, `sensors`). `TC_DETECT` reads the sensors on any setup.
+- **Crash handling.** The tool-drop `crash_gcode` is set from Python rather
+  than a `[tool_probe_endstop]` section, which would clash with upstream's
+  toolchanger-owned probes. Upstream doesn't do tool-drop crash detection in
+  that setup yet.
+- **RESUME** runs Mainsail's resume when `mainsail.cfg` is included, otherwise
+  plain `RESUME_BASE`.
+- **Upstream and Klipper versions.** Upstream's `tool_probe.py` (as of
+  `94756df`) calls Klipper's probe helpers with the older signatures. On
+  Klipper v0.13.0-816 (October 2026) those take different arguments, so
+  upstream's per-tool probes need a Klipper version upstream supports.
+  klipper-toolchanger-easy already tracks the newer API. This is between
+  upstream and Klipper; ToolConfig doesn't change it.
+- **Printers without tool sensors** still get everything except the sensor
+  views; the "is there a tool on the gantry?" check before homing is skipped.
+
+Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
+`_INITIALIZE_FROM_DETECTED_TOOL_IMPL`) are simply unused on upstream.
 
 ## What it does
 
@@ -83,6 +122,36 @@ sudo systemctl restart klipper
 ```
 
 The built web app is committed in `web/dist`, so the printer needs no Node.
+
+With **klipper-toolchanger** (viesturz), the script prints where to add the
+include instead: put `[include toolchanger/toolchanger-safety.cfg]` in
+`printer.cfg` *after* your toolchanger and tool configs.
+
+### Updates from Mainsail (Moonraker update manager)
+
+ToolConfig isn't a Mainsail plugin. Mainsail's **Update Manager** panel (Machine
+page) lists whatever Moonraker's update manager tracks, so add ToolConfig there.
+In `moonraker.conf`:
+
+```ini
+[update_manager ToolConfig]
+type: git_repo
+path: ~/ToolConfig
+origin: https://github.com/dking484/ToolConfig.git
+primary_branch: main
+managed_services: klipper
+```
+
+Restart Moonraker (`sudo systemctl restart moonraker`); ToolConfig then shows up
+next to Klipper and Mainsail with an **Update** button. An update pulls the
+repo and restarts Klipper. The web page, macros and Python module are served or
+linked straight from `~/ToolConfig`, so nothing else needs reinstalling. Only
+update while the printer is idle, since Klipper restarts and loses homing.
+
+- `~/ToolConfig` has to be the `git clone` from above. Moonraker flags a copied
+  folder or local edits as invalid or dirty.
+- Re-run `deploy/install-on-printer.sh` only if the release notes say so (for
+  example, a change to the nginx snippet).
 
 ## Develop
 

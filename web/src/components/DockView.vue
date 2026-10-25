@@ -195,7 +195,7 @@ async function saveAlignment() {
         <div class="panel-body row">
           <button :disabled="homed !== 'xyz' || !!state.busy" @click="tryRun(`TC_BACK_OUT T=${n}`, 'Back out')">Back out of {{ tool?.label }} dock</button>
           <button class="blue" :disabled="!!state.busy" @click="tryRun('TC_RECOVER', 'Recover')">Re-detect &amp; clear error</button>
-          <button :disabled="!!state.busy" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect')">Detect tool</button>
+          <button :disabled="!!state.busy" @click="tryRun('TC_DETECT', 'Detect')">Detect tool</button>
           <span class="muted small">None of these restart Klipper or lose homing.</span>
         </div>
       </div>

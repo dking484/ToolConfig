@@ -442,7 +442,7 @@ watch(() => state.wizardEntry, consumeEntry)
         <span class="grow" />
         <button v-if="onCarriage && !onCarriage.warnings.length" :disabled="busy || !!state.busy || baseBlockers.length > 0" @click="quickDrop">Drop off {{ onCarriage.label }}</button>
         <button v-if="!onGantryHere && parkValid" class="blue" :disabled="busy || !!state.busy || baseBlockers.length > 0" @click="quickPick">Pick up {{ label }}</button>
-        <button :disabled="busy || !!state.busy" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
+        <button :disabled="busy || !!state.busy" @click="tryRun('TC_DETECT', 'Detect tool')">Detect tool</button>
       </div>
       <p v-if="!onGantryHere && !parkValid" class="hint">
         {{ label }}'s saved dock position isn't valid yet, so it can't be picked up automatically. To teach by drop-off, put {{ label }} on the gantry by hand and press <b>Detect tool</b>.

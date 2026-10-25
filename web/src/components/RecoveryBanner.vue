@@ -54,7 +54,7 @@ async function dismiss() {
     </div>
 
     <div class="row actions">
-      <button :disabled="!!state.busy" @click="tryRun('DETECT_ACTIVE_TOOL_PROBE', 'Detect tool')">Detect tool</button>
+      <button :disabled="!!state.busy" @click="tryRun('TC_DETECT', 'Detect tool')">Detect tool</button>
       <button class="blue" :disabled="!!state.busy" @click="tryRun('TC_RECOVER', 'Recover')">Re-detect &amp; clear error</button>
       <button v-if="failedTool >= 0" :disabled="!canMove" @click="tryRun(`TC_BACK_OUT T=${failedTool}`, 'Back out')">Back out of T{{ failedTool }} dock</button>
       <button v-if="failedTool >= 0" class="primary" :disabled="!canMove" @click="retry">Retry pickup T{{ failedTool }}</button>

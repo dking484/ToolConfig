@@ -4,10 +4,36 @@
 #  - TC_CLEAR_ACTIVE_TOOL: forget the "active" tool without any motion, used
 #    after a failed pickup left the toolchanger pointing at a tool that is
 #    not actually on the carriage.
+#  - TC_DETECT: read every tool sensor now, whichever kind the printer has.
 #  - printer.toolchanger_ui status: the toolchanger's error message, which
-#    klipper-toolchanger does not publish itself.
+#    klipper-toolchanger does not publish itself, and one view of the tool
+#    sensors for the macros and the web page.
+#
+# Works with klipper-toolchanger-easy and with viesturz/klipper-toolchanger.
+# They report tool sensors differently:
+#  - a [tool_probe_endstop] object with per-tool [tool_probe] sections
+#    (easy, and upstream's older setup): probes carry `tool` (easy) or
+#    `tool_number` (upstream);
+#  - upstream's newer setup: `tool_probe:` / `detection_pin:` in each [tool],
+#    the probe endstop lives inside the toolchanger and presence comes from
+#    the tool's detect_state.
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+
+DETECT_ABSENT = 'absent'
+DETECT_UNAVAILABLE = 'unavailable'
+
+
+def _detect_state(tool):
+    return getattr(tool, 'detect_state', DETECT_UNAVAILABLE)
+
+
+def _probe_tool_number(probe):
+    n = getattr(probe, 'tool_number', None)
+    if n is None:
+        n = getattr(probe, 'tool', None)
+    return n
+
 
 class ToolchangerUI:
     def __init__(self, config):
@@ -21,23 +47,59 @@ class ToolchangerUI:
             desc=self.cmd_TC_CLEAR_ACTIVE_TOOL_help)
         self.gcode.register_command(
             'TC_RAISE', self.cmd_TC_RAISE, desc=self.cmd_TC_RAISE_help)
+        self.gcode.register_command(
+            'TC_DETECT', self.cmd_TC_DETECT, desc=self.cmd_TC_DETECT_help)
         # Live per-tool probe pin states. tool_probe registers every probe pin
         # with the buttons module (for crash detection) and reports each
         # change to tool_probe_endstop.note_probe_triggered; record them on
-        # the way through, so the UI can show them without polling.
+        # the way through, so the UI can show them without polling. The
+        # [tool_probe] sections come before this one, so the object exists.
         self.probe_states = {}
-        self.tool_probe_endstop = None
-        if config.has_section('tool_probe_endstop'):
+        tpe = self.printer.lookup_object('tool_probe_endstop', None)
+        if tpe is None and config.has_section('tool_probe_endstop'):
             tpe = self.printer.load_object(config, 'tool_probe_endstop')
-            self.tool_probe_endstop = tpe
+        self.tool_probe_endstop = tpe
+        if tpe is not None:
             orig = tpe.note_probe_triggered
             def note_probe_triggered(probe, eventtime, is_triggered):
-                self.probe_states[str(probe.tool)] = bool(is_triggered)
+                n = _probe_tool_number(probe)
+                if n is not None:
+                    self.probe_states[str(n)] = bool(is_triggered)
                 return orig(probe, eventtime, is_triggered)
             tpe.note_probe_triggered = note_probe_triggered
+            # A dropped tool pauses the print and turns the hotends off, but
+            # keeps homing (the stock crash_gcode ran M84).
+            gcode_macro = self.printer.load_object(config, 'gcode_macro')
+            tpe.crash_gcode = gcode_macro.load_template(
+                config, 'crash_gcode', '_TC_ON_CRASH')
 
     def _handle_connect(self):
         self.toolchanger = self.printer.lookup_object('toolchanger')
+
+    def _tools(self):
+        tc = self.toolchanger
+        return list(tc.tools.values()) if tc else []
+
+    def _sensor_kind(self):
+        if self.tool_probe_endstop is not None:
+            return 'tool_probe'
+        tools = self._tools()
+        if any(_detect_state(t) != DETECT_UNAVAILABLE for t in tools):
+            return 'detection_pin'
+        if any(getattr(t, 'probe', None) is not None for t in tools):
+            return 'tool_probe'
+        return 'none'
+
+    def _registered_probes(self):
+        """tool number -> tool_probe object, from whichever setup is used."""
+        tpe = self.tool_probe_endstop
+        if tpe is not None:
+            reg = getattr(tpe, 'tool_probes', None)
+            if reg is None:
+                reg = getattr(tpe, 'tool_number_to_probe', {})
+            return dict(reg)
+        return {t.tool_number: t.probe for t in self._tools()
+                if getattr(t, 'probe', None) is not None}
 
     cmd_TC_CLEAR_ACTIVE_TOOL_help = (
         "Forget the active tool without moving (carriage must be empty)")
@@ -60,25 +122,65 @@ class ToolchangerUI:
     def cmd_TC_RAISE(self, gcmd):
         raise gcmd.error(gcmd.get('MSG', 'Toolchanger error'))
 
+    cmd_TC_DETECT_help = "Read every tool sensor and report which tool is on the gantry"
+    def cmd_TC_DETECT(self, gcmd):
+        if self.tool_probe_endstop is not None:
+            # Also selects the active Z probe, as the toolchanger expects
+            self.gcode.run_script_from_command('DETECT_ACTIVE_TOOL_PROBE')
+        else:
+            # Probes owned by the toolchanger: read them, but leave the
+            # active probe to the toolchanger. detection_pin is live anyway.
+            toolhead = self.printer.lookup_object('toolhead')
+            print_time = toolhead.get_last_move_time()
+            for n, probe in self._registered_probes().items():
+                self.probe_states[str(n)] = bool(
+                    probe.mcu_probe.query_endstop(print_time))
+        probes = self._probe_status()
+        if not probes:
+            gcmd.respond_info("No tool sensors configured")
+            return
+        gcmd.respond_info("Tool sensors: %s" % (', '.join(
+            'T%s %s' % (n, 'in dock' if docked else 'ON GANTRY')
+            for n, docked in sorted(probes.items(), key=lambda i: int(i[0]))),))
+
     def _probe_status(self):
         out = dict(self.probe_states)
         if self.tool_probe_endstop is not None:
-            for tool in self.tool_probe_endstop.tool_probes:
-                out.setdefault(str(tool), False)
+            # The buttons module only reports pins that change from released,
+            # so a probe with no report yet is released (tool on the gantry).
+            for n in self._registered_probes():
+                out.setdefault(str(n), False)
+        for t in self._tools():
+            state = _detect_state(t)
+            if state != DETECT_UNAVAILABLE and t.tool_number >= 0:
+                out[str(t.tool_number)] = state == DETECT_ABSENT
         return out
+
+    def _detected_tool(self, probes):
+        tpe = self.tool_probe_endstop
+        if tpe is not None:
+            return tpe.active_tool_number
+        tc = self.toolchanger
+        if tc is not None and getattr(tc, 'has_detection', False):
+            return tc.detected_tool.tool_number if tc.detected_tool else -1
+        on_gantry = [int(n) for n, docked in probes.items() if not docked]
+        return on_gantry[0] if len(on_gantry) == 1 else -1
 
     def get_status(self, eventtime):
         tc = self.toolchanger
+        probes = self._probe_status()
         return {
             # klipper-toolchanger keeps the last message after recovery
             'error_message': tc.error_message if tc and tc.status == 'error'
                              else '',
             'active_tool': tc.active_tool.name if tc and tc.active_tool
                            else None,
-            # tool number -> True when the probe reads triggered (docked).
-            # The buttons module only reports pins that change from released,
-            # so a probe with no report yet is released (tool on the gantry).
-            'probes': self._probe_status(),
+            # tool number -> True when the sensor says the tool is docked
+            'probes': probes,
+            # tool number the sensors put on the gantry, -1 for none/unclear
+            'detected_tool': self._detected_tool(probes),
+            # 'tool_probe', 'detection_pin' or 'none'
+            'sensors': self._sensor_kind(),
         }
 
 def load_config(config):

@@ -39,7 +39,7 @@ const time = (t: number) => new Date(t).toLocaleTimeString([], { hour12: false }
       </div>
     </div>
     <form class="row send" @submit.prevent="send">
-      <input v-model="cmd" class="grow mono" placeholder="Send G-code, e.g. DETECT_ACTIVE_TOOL_PROBE" />
+      <input v-model="cmd" class="grow mono" placeholder="Send G-code, e.g. TC_DETECT" />
       <button class="blue" type="submit">Send</button>
     </form>
   </div>
