@@ -64,6 +64,11 @@ Open it at `http://<printer>/toolconfig/`, or from **ToolConfig** in Mainsail's 
   parameters). Also checks pasted start/tool-change G-code.
 - **Boards & IDs**: all MCUs with CAN UUID / USB serial and firmware, and a
   scan for unassigned CAN boards and USB serial devices.
+- **Matches Mainsail's theme**: dark/light mode, primary color, logo color,
+  theme preset logo (or your `.theme/sidebar-logo.*`), read from Mainsail's
+  settings in Moonraker (re-checked on focus and every minute). Status colors
+  and the emergency stop stay fixed; `.theme/custom.css` is not applied (it
+  targets Mainsail's own page).
 - **Recovery banner** on every tab when a tool change fails: probe states,
   re-detect, back out, retry pickup, resume or cancel.
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { emergencyStop, firmwareRestart, homed, isPrinting, lastChange, printState, runWithTool, state, status, tc, undoLastChange } from './store'
+import { emergencyStop, firmwareRestart, homed, isPrinting, lastChange, printState, runWithTool, state, status, tc, theme, undoLastChange } from './store'
 
 async function undo() {
   if (!lastChange.value) return
@@ -34,6 +34,8 @@ function readTab(): TabId {
   return (tabs.find((t) => t.id === h)?.id ?? 'tools') as TabId
 }
 const tab = ref<TabId>(readTab())
+const logoFailed = ref(false)
+watch(() => theme.value.logoUrl, () => (logoFailed.value = false))
 watch(tab, (t) => history.replaceState(null, '', '#' + t))
 window.addEventListener('hashchange', () => (tab.value = readTab()))
 
@@ -45,7 +47,8 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
 <template>
   <header class="top">
     <div class="row brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--accent)" d="M7,2H17V8H19V13H16.5L13,17H11L7.5,13H5V8H7V2M10,22H2V20H10A1,1 0 0,0 11,19V18H13V19A3,3 0 0,1 10,22Z"/></svg>
+      <img v-if="theme.logoUrl && !logoFailed" :src="theme.logoUrl" class="logo-img" alt="" @error="logoFailed = true" />
+      <svg v-else width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--logo)" d="M7,2H17V8H19V13H16.5L13,17H11L7.5,13H5V8H7V2M10,22H2V20H10A1,1 0 0,0 11,19V18H13V19A3,3 0 0,1 10,22Z"/></svg>
       <h1>ToolConfig</h1>
       <span class="grow" />
       <button
@@ -118,6 +121,7 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
 .top { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .brand { flex: 1 1 auto; min-width: 0; }
 .brand h1 { font-size: 17px; }
+.logo-img { height: 26px; width: auto; max-width: 120px; object-fit: contain; }
 .estop { display: inline-flex; align-items: center; gap: 6px; background: #d32f2f; border-color: #b71c1c; color: #fff; font-weight: 700; padding: 7px 14px; letter-spacing: .02em; }
 .estop:hover:not(:disabled) { background: #b71c1c; border-color: #7f0000; }
 .status-pills { justify-content: flex-end; }

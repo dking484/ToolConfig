@@ -271,7 +271,7 @@ const lineCount = computed(() => text.value.split('\n').length)
 .small { font-size: 12.5px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg button { border: none; border-radius: 0; background: transparent; }
-.seg button.on { background: var(--accent-2); color: #fff; }
+.seg button.on { background: var(--accent-2); color: var(--on-accent); }
 .card-sec { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px 12px; display: grid; gap: 10px; }
 .card-sec h3 { font-size: 14px; }
 .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }

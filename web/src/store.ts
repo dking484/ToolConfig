@@ -2,6 +2,7 @@ import { computed, reactive, shallowRef } from 'vue'
 import { Moonraker, type Status } from './lib/moonraker'
 import { allMcus, buildTools } from './lib/tools'
 import { ConfigIndex } from './lib/configFiles'
+import { resolveTheme, type ResolvedTheme } from './lib/mainsailTheme'
 
 export const mr = new Moonraker(import.meta.env.VITE_MOONRAKER ?? '')
 export const configIndex = new ConfigIndex(mr)
@@ -50,8 +51,37 @@ function log(text: string, kind: LogLine['kind']) {
 
 mr.on('connection', async (c) => {
   state.connection = c
-  if (c === 'open') await init()
+  if (c === 'open') {
+    loadTheme()
+    await init()
+  }
 })
+
+// ---- Mainsail theme -----------------------------------------------------------
+// Moonraker doesn't announce database changes, so re-read when the tab gets focus
+// (e.g. coming back from Mainsail's settings) and once a minute.
+export const theme = shallowRef<ResolvedTheme>(resolveTheme(null, null, []))
+export async function loadTheme() {
+  const [ui, config, files] = await Promise.all([
+    mr.call('server.database.get_item', { namespace: 'mainsail', key: 'uiSettings' }).then((r) => r.value).catch(() => null),
+    fetch('/config.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    listConfigDir('.theme'),
+  ])
+  const t = resolveTheme(ui, config, files)
+  theme.value = t
+  const root = document.documentElement
+  root.dataset.theme = t.mode
+  root.style.setProperty('--accent', t.primary)
+  root.style.setProperty('--accent-2', t.primary)
+  root.style.setProperty('--on-accent', t.onPrimary)
+  root.style.setProperty('--logo', t.logoColor)
+}
+window.addEventListener('focus', () => {
+  if (state.connection === 'open') loadTheme()
+})
+window.setInterval(() => {
+  if (state.connection === 'open' && document.visibilityState === 'visible') loadTheme()
+}, 60000)
 mr.on('status', ({ full }) => {
   status.value = { ...full }
 })

@@ -1,12 +1,17 @@
 :root {
-  --bg: #121214;
-  --panel: #1e1e22;
-  --panel-2: #26262b;
-  --border: #34343b;
+  /* Dark palette (Mainsail's dark mode: #121212 page, #1e1e1e cards) */
+  --bg: #121212;
+  --panel: #1e1e1e;
+  --panel-2: #2a2a2a;
+  --border: #3a3a3a;
   --text: #e8e8ea;
   --muted: #9a9aa3;
-  --accent: #e2463c;
+  /* Follow Mainsail's theme (set from its settings at runtime) */
+  --accent: #2196f3; /* Mainsail primary color: main buttons, active tab */
   --accent-2: #2196f3;
+  --on-accent: #ffffff; /* text on the primary color */
+  --logo: #d41216; /* Mainsail logo color */
+  /* Status colors never follow the theme */
   --ok: #4caf50;
   --warn: #ffa726;
   --err: #ef5350;
@@ -15,9 +20,19 @@
   --mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
   color-scheme: dark;
 }
+/* Light palette: Mainsail set to light mode, or the OS prefers light before Mainsail's setting is known */
+:root[data-theme='light'] {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --panel-2: #f0f0f3;
+  --border: #d9d9df;
+  --text: #1b1b1f;
+  --muted: #63636b;
+  color-scheme: light;
+}
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    --bg: #f3f3f5;
+  :root:not([data-theme]) {
+    --bg: #f5f5f5;
     --panel: #ffffff;
     --panel-2: #f0f0f3;
     --border: #d9d9df;
@@ -51,8 +66,8 @@ button, .btn {
 }
 button:hover:not(:disabled) { border-color: var(--muted); }
 button:disabled { opacity: .45; cursor: not-allowed; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.blue { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.blue { background: var(--accent-2); border-color: var(--accent-2); color: var(--on-accent); }
 button.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 50%, var(--border)); }
 button.small { padding: 3px 8px; font-size: 12.5px; }
 button.ghost { background: transparent; }
