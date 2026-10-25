@@ -2,7 +2,7 @@
 // Live per-tool sensor states (pushed by Klipper on every change, no polling),
 // shown as where each tool is rather than raw probe states.
 import { computed, ref, watch } from 'vue'
-import { status, tools } from '../store'
+import { probing, status, tools } from '../store'
 
 const live = computed<Record<string, boolean> | null>(() => status.value.toolchanger_ui?.probes ?? null)
 const flash = ref<Record<string, number>>({})
@@ -30,8 +30,10 @@ const rows = computed(() =>
       key: String(t.number),
       where: v === undefined ? 'unknown' : v ? 'dock' : 'gantry',
       raw: v === undefined ? 'no reading yet' : v ? 'probe pressed (triggered)' : 'probe released (open)',
+      // Pressed by the bed during a probe, not docked
+      probing: t.active && v === true && probing.value,
       // The toolchanger says this tool is mounted, but its sensor says it's in a dock
-      mismatch: t.active && v === true,
+      mismatch: t.active && v === true && !probing.value,
     }
   }),
 )
@@ -46,10 +48,10 @@ const onGantry = computed(() => rows.value.filter((r) => r.where === 'gantry'))
         v-for="r in rows"
         :key="r.key"
         class="pill"
-        :class="[r.where === 'gantry' ? 'ok' : r.where === 'dock' ? '' : 'warn', { flash: flash[r.key], bad: r.mismatch }]"
-        :title="`${r.label} sensor: ${r.raw}`"
+        :class="[r.where === 'gantry' || r.probing ? 'ok' : r.where === 'dock' ? '' : 'warn', { flash: flash[r.key] && !r.probing, bad: r.mismatch }]"
+        :title="r.probing ? `${r.label} is probing: the nozzle touching the bed presses its sensor` : `${r.label} sensor: ${r.raw}`"
       >
-        <span class="dot" />{{ r.label }} {{ r.where === 'gantry' ? 'on gantry' : r.where === 'dock' ? 'in dock' : 'unknown' }}
+        <span class="dot" />{{ r.label }} {{ r.probing ? 'probing' : r.where === 'gantry' ? 'on gantry' : r.where === 'dock' ? 'in dock' : 'unknown' }}
       </span>
       <span class="grow" />
       <span v-if="!live" class="muted small">Needs the updated toolchanger_ui.py (Klipper restart).</span>

@@ -40,6 +40,8 @@ export const tools = computed(() => buildTools(status.value))
 export const mcus = computed(() => allMcus(status.value))
 export const tc = computed(() => status.value.toolchanger ?? {})
 export const safety = computed(() => status.value['gcode_macro _TC_SAFETY'] ?? null)
+// A probing/homing move is running: the active tool's Tap sensor then reads "docked"
+export const probing = computed(() => !!status.value.toolchanger_ui?.probing)
 export const homed = computed(() => status.value.toolhead?.homed_axes ?? '')
 export const printState = computed(() => status.value.print_stats?.state ?? 'standby')
 export const isPrinting = computed(() => ['printing', 'paused'].includes(printState.value))

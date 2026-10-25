@@ -56,6 +56,16 @@ class ToolchangerUI:
         self.probe_heat_wait = False
         self.probe_heat_timer = self.reactor.register_timer(
             self._probe_heat_timer)
+        # Probing (and homing) moves: a Tap sensor pressed by the bed then
+        # reads the same as a docked tool, so the UI should not alarm.
+        self.homing_move_active = False
+        self.homing_move_end_time = -99.
+        self.printer.register_event_handler('homing:homing_move_begin',
+                                            self._homing_move_begin)
+        self.printer.register_event_handler('homing:homing_move_end',
+                                            self._homing_move_end)
+        self.printer.register_event_handler('gcode:command_error',
+                                            self._homing_move_end)
         self.gcode.register_command(
             'TC_CLEAR_ACTIVE_TOOL', self.cmd_TC_CLEAR_ACTIVE_TOOL,
             desc=self.cmd_TC_CLEAR_ACTIVE_TOOL_help)
@@ -154,6 +164,19 @@ class ToolchangerUI:
                     "RESPOND MSG=\"%s turned off (only heated for probing)\""
                     % (heater, heater))
         return self.reactor.NEVER
+
+    def _homing_move_begin(self, *args):
+        self.homing_move_active = True
+
+    def _homing_move_end(self, *args):
+        self.homing_move_active = False
+        self.homing_move_end_time = self.reactor.monotonic()
+
+    def _probing(self, eventtime):
+        # The sensor releases once the nozzle lifts after a probe; allow a
+        # moment for that.
+        return (self.homing_move_active
+                or eventtime - self.homing_move_end_time < 2.)
 
     def _tools(self):
         tc = self.toolchanger
@@ -260,6 +283,9 @@ class ToolchangerUI:
             'detected_tool': self._detected_tool(probes),
             # 'tool_probe', 'detection_pin' or 'none'
             'sensors': self._sensor_kind(),
+            # a probing/homing move is running (or just ended): the active
+            # tool's Tap sensor reading "docked" is the nozzle on the bed
+            'probing': self._probing(eventtime),
         }
 
 def load_config(config):

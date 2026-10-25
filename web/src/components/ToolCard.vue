@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
-import { homed, isPrinting, realign, safety, state, tc } from '../store'
+import { homed, isPrinting, probing, realign, safety, state, tc } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
 defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
@@ -24,6 +24,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       <span class="swatch" :style="{ background: t.color ?? 'var(--border)' }" />
       <h3>{{ t.label }}</h3>
       <span v-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
+      <span v-else-if="t.active && probing" class="pill ok" title="The nozzle is touching the bed, which presses the Tap sensor"><span class="dot" />On gantry, probing</span>
       <span v-else-if="t.active" class="pill err" title="The toolchanger says this tool is mounted, but its sensor says it's in a dock (pressed, not seated, or not connected)"><span class="dot" />On gantry? sensor says dock</span>
       <span v-else-if="t.where === 'gantry' && otherSelected" class="pill warn" :title="`Its sensor says it's on the gantry, but the toolchanger has ${otherSelected} selected. It may be sitting crooked in its dock, or press Detect tool / Initialize changer.`"><span class="dot" />On gantry? {{ otherSelected }} is selected</span>
       <span v-else-if="t.where === 'gantry'" class="pill ok" title="Its sensor says it's on the gantry. The toolchanger selects it when you home or press Initialize changer."><span class="dot" />On gantry</span>
