@@ -128,6 +128,10 @@ sudo systemctl restart klipper
 ```
 
 The built web app is committed in `web/dist`, so the printer needs no Node.
+Released versions are listed under
+[Releases](https://github.com/dking484/ToolConfig/releases); to install one,
+add `--branch v0.1.0` (or the version you want) to the `git clone`. Each
+release also has a zip, but use the clone if you want Mainsail updates (below).
 
 With **klipper-toolchanger** (viesturz), the script prints where to add the
 include instead: put `[include toolchanger/toolchanger-safety.cfg]` in
@@ -145,13 +149,18 @@ type: git_repo
 path: ~/ToolConfig
 origin: https://github.com/dking484/ToolConfig.git
 primary_branch: main
+channel: stable
 managed_services: klipper
 ```
 
+`channel: stable` offers only released versions (tags like `v0.1.0`). Leave it
+out to get every change on `main` as soon as it is pushed (less tested).
+
 Restart Moonraker (`sudo systemctl restart moonraker`); ToolConfig then shows up
-next to Klipper and Mainsail with an **Update** button. An update pulls the
-repo and restarts Klipper. The web page, macros and Python module are served or
-linked straight from `~/ToolConfig`, so nothing else needs reinstalling. Only
+next to Klipper and Mainsail with an **Update** button. An update brings the
+clone up to date (to the newest release on `stable`) and restarts Klipper. The
+web page, macros and Python module are served or linked straight from
+`~/ToolConfig`, so nothing else needs reinstalling. Only
 update while the printer is idle, since Klipper restarts and loses homing.
 
 - `~/ToolConfig` has to be the `git clone` from above. Moonraker flags a copied
