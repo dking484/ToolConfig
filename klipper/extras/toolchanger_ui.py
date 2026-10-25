@@ -24,12 +24,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-DETECT_ABSENT = 'absent'
-DETECT_UNAVAILABLE = 'unavailable'
-
-
-def _detect_state(tool):
-    return getattr(tool, 'detect_state', DETECT_UNAVAILABLE)
+import sys
 
 
 def _probe_tool_number(probe):
@@ -186,11 +181,30 @@ class ToolchangerUI:
         if self.tool_probe_endstop is not None:
             return 'tool_probe'
         tools = self._tools()
-        if any(_detect_state(t) != DETECT_UNAVAILABLE for t in tools):
+        if self._detection_states():
             return 'detection_pin'
         if any(getattr(t, 'probe', None) is not None for t in tools):
             return 'tool_probe'
         return 'none'
+
+    def _detection_states(self):
+        """tool number -> True if its detection_pin says it is mounted.
+
+        Empty unless the toolchanger uses detection pins. easy and upstream
+        use different values for detect_state (-1/0/1 vs strings), so take
+        them from whichever toolchanger module is loaded."""
+        tc = self.toolchanger
+        if tc is None or not getattr(tc, 'has_detection', False):
+            return {}
+        mod = sys.modules.get(type(tc).__module__)
+        present = getattr(mod, 'DETECT_PRESENT', None)
+        unavailable = getattr(mod, 'DETECT_UNAVAILABLE', None)
+        out = {}
+        for t in self._tools():
+            state = getattr(t, 'detect_state', unavailable)
+            if state != unavailable and t.tool_number >= 0:
+                out[t.tool_number] = state == present
+        return out
 
     def _registered_probes(self):
         """tool number -> tool_probe object, from whichever setup is used."""
@@ -229,6 +243,8 @@ class ToolchangerUI:
         if self.tool_probe_endstop is not None:
             # Also selects the active Z probe, as the toolchanger expects
             self.gcode.run_script_from_command('DETECT_ACTIVE_TOOL_PROBE')
+            for n, triggered in self._last_query().items():
+                self.probe_states[str(n)] = bool(triggered)
         else:
             # Probes owned by the toolchanger: read them, but leave the
             # active probe to the toolchanger. detection_pin is live anyway.
@@ -245,17 +261,23 @@ class ToolchangerUI:
             'T%s %s' % (n, 'in dock' if docked else 'ON GANTRY')
             for n, docked in sorted(probes.items(), key=lambda i: int(i[0]))),))
 
+    def _last_query(self):
+        tpe = self.tool_probe_endstop
+        return dict(getattr(tpe, 'last_query', None) or {}) if tpe else {}
+
     def _probe_status(self):
-        out = dict(self.probe_states)
+        out = {}
         if self.tool_probe_endstop is not None:
-            # The buttons module only reports pins that change from released,
-            # so a probe with no report yet is released (tool on the gantry).
             for n in self._registered_probes():
-                out.setdefault(str(n), False)
-        for t in self._tools():
-            state = _detect_state(t)
-            if state != DETECT_UNAVAILABLE and t.tool_number >= 0:
-                out[str(t.tool_number)] = state == DETECT_ABSENT
+                out[str(n)] = False
+            # The buttons module doesn't report a sensor that is already
+            # pressed when Klipper starts; the probe endstop's own query (at
+            # connect and on every DETECT) covers those until they change.
+            for n, triggered in self._last_query().items():
+                out[str(n)] = bool(triggered)
+        out.update(self.probe_states)
+        for n, present in self._detection_states().items():
+            out[str(n)] = not present
         return out
 
     def _detected_tool(self, probes):
