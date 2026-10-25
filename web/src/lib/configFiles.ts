@@ -26,6 +26,13 @@ export class ConfigIndex {
 
   constructor(private mr: Moonraker) {}
 
+  private loadedAt = 0
+
+  /** load() unless it was loaded within `maxAgeMs` (avoids reading every file twice in a row). */
+  async ensureFresh(maxAgeMs = 5000) {
+    if (Date.now() - this.loadedAt > maxAgeMs) await this.load()
+  }
+
   async load() {
     const list: { path: string }[] = await this.mr.call('server.files.list', { root: 'config' })
     this.allPaths = list.map((f) => f.path).filter((p) => p.endsWith('.cfg'))
@@ -34,6 +41,7 @@ export class ConfigIndex {
     await this.visit('printer.cfg', seen)
     const printer = this.files.find((f) => f.path === 'printer.cfg')
     this.autosave = printer ? parseAutosave(printer.text) : new Map()
+    this.loadedAt = Date.now()
   }
 
   private async visit(path: string, seen: Set<string>) {

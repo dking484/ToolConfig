@@ -37,7 +37,21 @@ Open it at `http://<printer>/toolconfig/`, or from **ToolConfig** in Mainsail's 
 - **Tools**: every tool with dock position, offsets, nozzle, probe offset,
   input shaper, CAN/USB board and firmware, live temps, and sanity warnings
   (e.g. dock positions outside the axis range).
-- **Edit**: change any of those. Values are written to the file Klipper reads
+- **Edit a tool's whole config** (Home Assistant style): a **Visual editor**
+  with a card per section (board, extruder, driver, fans, LEDs, tool, probe,
+  accelerometer, macro; unknown keys too) and a **Code editor** with the raw
+  `Tn.cfg`. Both edit the same text. Save shows the changes, backs the file up,
+  applies dock position / offsets / shaper / pressure advance / rotation
+  distance live, and flags anything that needs a restart.
+- **Add a tool**: copies an existing tool's file and renumbers everything
+  (board, extruder, fans, LEDs, macro, probe, accelerometer), sets the CAN UUID
+  (scan) or USB serial, nozzle, thermistor, max temp, and leaves the dock
+  position invalid until it is taught. Review it in the editor before creating;
+  "decide later" creates it disabled.
+- **Disable / enable tools**: files move to/from `toolchanger/tools-disabled/`.
+  If Klipper won't start after a change, **Undo the last ToolConfig change**
+  restores the previous files and restarts.
+- **Quick edits**: change any of those. Values are written to the file Klipper reads
   them from (following `[include]` order), comments are kept, a backup goes to
   `config/toolconfig-backups/`, and the value is applied live where Klipper
   allows (dock position, offsets, pressure advance, rotation distance, shaper).

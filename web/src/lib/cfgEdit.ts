@@ -120,6 +120,18 @@ export function setOption(text: string, section: string, key: string, value: str
   return lines.join(eol)
 }
 
+/** Remove `key` (and its continuation lines) from the last [section] that defines it. */
+export function removeOption(text: string, section: string, key: string): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lines = text.split(/\r?\n/)
+  const want = normalizeSection(section)
+  const sec = [...parseCfg(text)].reverse().find((s) => normalizeSection(s.name) === want && s.options.has(key.toLowerCase()))
+  if (!sec) return text
+  const opt = sec.options.get(key.toLowerCase())!
+  lines.splice(opt.line, opt.endLine - opt.line + 1)
+  return lines.join(eol)
+}
+
 /** Read the SAVE_CONFIG ("#*#") block: section -> key -> value. */
 export function parseAutosave(text: string): Map<string, Map<string, string>> {
   const out = new Map<string, Map<string, string>>()

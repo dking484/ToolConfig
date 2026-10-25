@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { emergencyStop, firmwareRestart, homed, isPrinting, printState, runWithTool, state, status, tc } from './store'
+import { emergencyStop, firmwareRestart, homed, isPrinting, lastChange, printState, runWithTool, state, status, tc, undoLastChange } from './store'
+
+async function undo() {
+  if (!lastChange.value) return
+  if (!confirm(`Undo "${lastChange.value.label}" and restart Klipper?\n\nThe tool config files go back to how they were before that change.`)) return
+  try {
+    await undoLastChange()
+  } catch (e: any) {
+    alert('Undo failed: ' + e.message)
+  }
+}
 import RecoveryBanner from './components/RecoveryBanner.vue'
 import PrepBar from './components/PrepBar.vue'
 import ToolRequiredDialog from './components/ToolRequiredDialog.vue'
@@ -68,7 +78,13 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
     <div v-if="state.klippy !== 'ready' && state.connection === 'open'" class="callout err">
       <strong>Klipper is {{ state.klippy }}.</strong>
       <pre class="mono klippy-msg">{{ state.klippyMessage }}</pre>
-      <button class="primary" @click="firmwareRestart">Firmware restart</button>
+      <div class="row">
+        <button class="primary" @click="firmwareRestart">Firmware restart</button>
+        <template v-if="lastChange">
+          <button class="blue" @click="undo">Undo the last ToolConfig change and restart</button>
+          <span class="muted small">{{ lastChange.label }} · {{ new Date(lastChange.time).toLocaleString() }}</span>
+        </template>
+      </div>
     </div>
 
     <RecoveryBanner />
@@ -82,6 +98,7 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
         <span class="muted">Restarting loses homing and QGL.</span>
       </div>
       <button @click="state.pendingRestart = []">Later</button>
+      <button v-if="lastChange" class="ghost" :title="`Put back the files from before: ${lastChange.label}`" @click="undo">Undo</button>
       <button class="primary" @click="firmwareRestart">Restart Klipper now</button>
     </div>
 

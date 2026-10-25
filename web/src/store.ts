@@ -158,6 +158,74 @@ export async function runWithTool(script: string, label: string) {
   return false
 }
 
+// ---- tool config files: last change (for undo), disable / enable ------------
+export const TOOLS_DIR = 'toolchanger/tools'
+export const DISABLED_DIR = 'toolchanger/tools-disabled'
+
+export type LastChange =
+  | { kind: 'edit'; path: string; backupText: string; label: string; time: number }
+  | { kind: 'create'; path: string; label: string; time: number }
+  | { kind: 'disable' | 'enable'; from: string; to: string; label: string; time: number }
+
+const LAST_KEY = 'toolconfig.lastChange'
+function loadLast(): LastChange | null {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_KEY) ?? 'null')
+  } catch {
+    return null
+  }
+}
+export const lastChange = shallowRef<LastChange | null>(loadLast())
+export function recordChange(c: LastChange) {
+  lastChange.value = c
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify(c))
+  } catch {
+    /* private window: undo just won't survive a reload */
+  }
+}
+function clearLast() {
+  lastChange.value = null
+  try {
+    localStorage.removeItem(LAST_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+async function ensureDir(path: string) {
+  try {
+    await mr.call('server.files.post_directory', { path: `config/${path}` })
+  } catch {
+    /* already exists */
+  }
+}
+export async function moveConfigFile(from: string, to: string) {
+  await ensureDir(to.slice(0, to.lastIndexOf('/')))
+  await mr.call('server.files.move', { source: `config/${from}`, dest: `config/${to}` })
+}
+export async function listConfigDir(path: string): Promise<string[]> {
+  try {
+    const res = await mr.call('server.files.get_directory', { path: `config/${path}` })
+    return (res.files ?? []).map((f: any) => f.filename as string)
+  } catch {
+    return []
+  }
+}
+
+/** Put the files back the way they were before the last ToolConfig change, then restart Klipper. */
+export async function undoLastChange() {
+  const c = lastChange.value
+  if (!c) return
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  if (c.kind === 'edit') await mr.upload('config', c.path, c.backupText)
+  else if (c.kind === 'create') await moveConfigFile(c.path, `${DISABLED_DIR}/${c.path.split('/').pop()}.undone-${stamp}`)
+  else await moveConfigFile(c.to, c.from)
+  clearLast()
+  state.pendingRestart = []
+  await mr.call('printer.firmware_restart')
+}
+
 /**
  * Emergency stop through Moonraker's endpoint, which bypasses the G-code queue
  * (an M112 sent as G-code would wait behind a running command).
@@ -179,4 +247,16 @@ export async function firmwareRestart() {
 
 export function connect() {
   mr.connect()
+  // While Klipper is down (error / restarting), keep its state and message current
+  window.setInterval(async () => {
+    if (state.connection !== 'open' || state.klippy === 'ready') return
+    try {
+      const info = await mr.call('printer.info', undefined, 3000)
+      state.klippyMessage = info.state_message
+      if (info.state === 'ready') await init()
+      else state.klippy = info.state
+    } catch {
+      /* Moonraker busy; try again next tick */
+    }
+  }, 2500)
 }
