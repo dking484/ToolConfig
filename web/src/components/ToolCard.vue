@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
-import { homed, isPrinting, realign, safety, state } from '../store'
+import { homed, isPrinting, realign, safety, state, tc } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
 defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
 
 const f = (v: number | null | undefined, d = 1) => (v === null || v === undefined || isNaN(v) ? '-' : v.toFixed(d))
 const t = computed(() => props.tool)
+// A different tool the toolchanger currently has selected (a real conflict), if any
+const otherSelected = computed(() => {
+  const n = tc.value.tool_number
+  return typeof n === 'number' && n >= 0 && n !== props.tool.number ? `T${n}` : ''
+})
 const hot = computed(() => (t.value.temp ?? 0) > 50)
 const failed = computed(() => !!safety.value?.last_error && safety.value?.last_error_tool === props.tool.number)
 const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.value.offset.z)
@@ -20,7 +25,8 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       <h3>{{ t.label }}</h3>
       <span v-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
       <span v-else-if="t.active" class="pill err" title="The toolchanger says this tool is mounted, but its sensor says it's in a dock (pressed, not seated, or not connected)"><span class="dot" />On gantry? sensor says dock</span>
-      <span v-else-if="t.where === 'gantry'" class="pill warn" title="Its sensor says it's on the gantry, but the toolchanger has another tool (or none) selected. Press Detect tool, or it may be sitting crooked in its dock."><span class="dot" />On gantry?</span>
+      <span v-else-if="t.where === 'gantry' && otherSelected" class="pill warn" :title="`Its sensor says it's on the gantry, but the toolchanger has ${otherSelected} selected. It may be sitting crooked in its dock, or press Detect tool / Initialize changer.`"><span class="dot" />On gantry? {{ otherSelected }} is selected</span>
+      <span v-else-if="t.where === 'gantry'" class="pill ok" title="Its sensor says it's on the gantry. The toolchanger selects it when you home or press Initialize changer."><span class="dot" />On gantry</span>
       <span v-else class="pill"><span class="dot" />{{ t.where === 'dock' ? 'In dock' : 'Unknown' }}</span>
       <span class="grow" />
       <span class="temp mono" :class="{ hot }">{{ f(t.temp) }}° <span class="muted">/ {{ f(t.target, 0) }}°</span></span>
