@@ -26,8 +26,10 @@ class ToolchangerUI:
         # change to tool_probe_endstop.note_probe_triggered; record them on
         # the way through, so the UI can show them without polling.
         self.probe_states = {}
+        self.tool_probe_endstop = None
         if config.has_section('tool_probe_endstop'):
             tpe = self.printer.load_object(config, 'tool_probe_endstop')
+            self.tool_probe_endstop = tpe
             orig = tpe.note_probe_triggered
             def note_probe_triggered(probe, eventtime, is_triggered):
                 self.probe_states[str(probe.tool)] = bool(is_triggered)
@@ -58,6 +60,13 @@ class ToolchangerUI:
     def cmd_TC_RAISE(self, gcmd):
         raise gcmd.error(gcmd.get('MSG', 'Toolchanger error'))
 
+    def _probe_status(self):
+        out = dict(self.probe_states)
+        if self.tool_probe_endstop is not None:
+            for tool in self.tool_probe_endstop.tool_probes:
+                out.setdefault(str(tool), False)
+        return out
+
     def get_status(self, eventtime):
         tc = self.toolchanger
         return {
@@ -66,8 +75,10 @@ class ToolchangerUI:
                              else '',
             'active_tool': tc.active_tool.name if tc and tc.active_tool
                            else None,
-            # tool number -> True when the probe reads triggered (docked)
-            'probes': dict(self.probe_states),
+            # tool number -> True when the probe reads triggered (docked).
+            # The buttons module only reports pins that change from released,
+            # so a probe with no report yet is released (tool on the gantry).
+            'probes': self._probe_status(),
         }
 
 def load_config(config):
