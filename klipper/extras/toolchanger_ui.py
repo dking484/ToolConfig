@@ -111,6 +111,15 @@ class ToolchangerUI:
             self._wrap_command('_TAP_PROBE_ACTIVATE', self._probe_activate)
         for name in ('SELECT_TOOL', 'UNSELECT_TOOL'):
             self._wrap_command(name, self._guard_stray_tool)
+        if self.tool_probe_endstop is not None:
+            self._wrap_command('DETECT_ACTIVE_TOOL_PROBE', self._detect_probes)
+
+    def _detect_probes(self, orig, gcmd):
+        # Macros run DETECT_ACTIVE_TOOL_PROBE too; keep the live map in step
+        # with each fresh read of all sensors.
+        orig(gcmd)
+        for n, triggered in self._last_query().items():
+            self.probe_states[str(n)] = bool(triggered)
 
     def _guard_stray_tool(self, orig, gcmd):
         # A tool put on the gantry by hand isn't known to the toolchanger:
@@ -268,8 +277,6 @@ class ToolchangerUI:
         if self.tool_probe_endstop is not None:
             # Also selects the active Z probe, as the toolchanger expects
             self.gcode.run_script_from_command('DETECT_ACTIVE_TOOL_PROBE')
-            for n, triggered in self._last_query().items():
-                self.probe_states[str(n)] = bool(triggered)
         else:
             # Probes owned by the toolchanger: read them, but leave the
             # active probe to the toolchanger. detection_pin is live anyway.
@@ -319,9 +326,8 @@ class ToolchangerUI:
         return out
 
     def _detected_tool(self, probes):
-        tpe = self.tool_probe_endstop
-        if tpe is not None:
-            return tpe.active_tool_number
+        # Not tool_probe_endstop.active_tool_number: that is the Z probe in
+        # use and stays on a tool after it is docked, until the next DETECT.
         tc = self.toolchanger
         if tc is not None and getattr(tc, 'has_detection', False):
             return tc.detected_tool.tool_number if tc.detected_tool else -1
