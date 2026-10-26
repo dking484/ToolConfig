@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { configIndex, DISABLED_DIR, homed, isPrinting, listConfigDir, moveConfigFile, recordChange, state, tc, tools, TOOLS_DIR, tryRun } from '../store'
+import { configIndex, detectTool, DISABLED_DIR, dockTool, homed, isPrinting, listConfigDir, moveConfigFile, recordChange, state, tc, tools, TOOLS_DIR, tryRun, unadoptedTool } from '../store'
 import type { ToolInfo } from '../lib/tools'
 import { extruderName } from '../lib/toolTemplate'
 import ToolCard from './ToolCard.vue'
@@ -13,7 +13,8 @@ const editing = ref<{ path: string; title: string; toolNumber: number; extruder:
 const adding = ref(false)
 const disabled = ref<string[]>([])
 const error = ref('')
-const active = computed(() => tools.value.find((t) => t.active))
+// The tool on the gantry: selected by the toolchanger, or put there by hand
+const active = computed(() => tools.value.find((t) => t.active) ?? tools.value.find((t) => t.number === unadoptedTool.value))
 
 async function refreshDisabled() {
   disabled.value = (await listConfigDir(DISABLED_DIR)).filter((f) => f.endsWith('.cfg')).sort()
@@ -25,7 +26,7 @@ function select(t: ToolInfo) {
 }
 function park(t: ToolInfo) {
   // Drop the tool in its own dock without picking another one up
-  tryRun('UNSELECT_TOOL RESTORE_AXIS=', `Dock T${t.number}`)
+  dockTool(t.number)
 }
 function dock(t: ToolInfo) {
   state.dockTool = t.number
@@ -67,7 +68,7 @@ async function enable(file: string) {
     <div class="row">
       <h2 class="grow">{{ tools.length }} tools <span class="muted">· active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span></h2>
       <button v-if="active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || active.warnings.length > 0" @click="park(active)">Dock {{ active.label }} (empty the gantry)</button>
-      <button :disabled="!!state.busy" title="Read every tool sensor to see which tool is on the gantry" @click="tryRun('TC_DETECT', 'Detect tool')">Detect tool</button>
+      <button :disabled="!!state.busy" title="Read every tool sensor and select the tool that is on the gantry (no motion)" @click="detectTool()">Detect tool</button>
       <button :disabled="!!state.busy || isPrinting" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
       <button class="primary" :disabled="isPrinting" @click="adding = true">+ Add tool</button>
     </div>

@@ -95,19 +95,43 @@ class ToolchangerUI:
     def _handle_connect(self):
         self.toolchanger = self.printer.lookup_object('toolchanger')
 
-    def _handle_ready(self):
-        # Wrap whatever _TAP_PROBE_ACTIVATE the printer has. Upstream's
-        # version never heats, so then nothing is ever recorded.
-        if not self.probe_heat_off_delay:
-            return
-        name = '_TAP_PROBE_ACTIVATE'
+    def _wrap_command(self, name, wrapper):
+        """Replace command `name` with wrapper(orig, gcmd), if it exists."""
         orig = self.gcode.register_command(name, None)
         if orig is None:
             return
         desc = getattr(self.gcode, 'gcode_help', {}).get(name)
-        def wrapped(gcmd):
-            self._probe_activate(orig, gcmd)
-        self.gcode.register_command(name, wrapped, desc=desc)
+        self.gcode.register_command(
+            name, lambda gcmd: wrapper(orig, gcmd), desc=desc)
+
+    def _handle_ready(self):
+        # Wrap whatever _TAP_PROBE_ACTIVATE the printer has. Upstream's
+        # version never heats, so then nothing is ever recorded.
+        if self.probe_heat_off_delay:
+            self._wrap_command('_TAP_PROBE_ACTIVATE', self._probe_activate)
+        for name in ('SELECT_TOOL', 'UNSELECT_TOOL'):
+            self._wrap_command(name, self._guard_stray_tool)
+
+    def _guard_stray_tool(self, orig, gcmd):
+        # A tool put on the gantry by hand isn't known to the toolchanger:
+        # a pickup or dropoff would then carry it into a dock. Outside
+        # prints, refuse to move until it is selected (TC_DETECT /
+        # INITIALIZE_TOOLCHANGER, no motion) or taken off.
+        now = self.reactor.monotonic()
+        tc = self.toolchanger
+        if (tc is not None and tc.status == 'ready'
+                and not self._is_printing(now) and not self._probing(now)):
+            active = tc.active_tool.tool_number if tc.active_tool else -1
+            strays = sorted(int(n) for n, docked in self._probe_status().items()
+                            if not docked and int(n) != active)
+            if strays:
+                raise gcmd.error(
+                    "T%d is on the gantry (its sensor says so) but the "
+                    "toolchanger has %s selected, so moving could carry it "
+                    "into a dock. Run TC_DETECT (no motion) to select it, or "
+                    "take it off by hand." % (
+                        strays[0], 'T%d' % active if active >= 0 else 'no tool'))
+        orig(gcmd)
 
     def _is_printing(self, eventtime):
         ps = self.printer.lookup_object('print_stats', None)
@@ -238,7 +262,8 @@ class ToolchangerUI:
     def cmd_TC_RAISE(self, gcmd):
         raise gcmd.error(gcmd.get('MSG', 'Toolchanger error'))
 
-    cmd_TC_DETECT_help = "Read every tool sensor and report which tool is on the gantry"
+    cmd_TC_DETECT_help = ("Read every tool sensor and select the tool that is"
+                          " on the gantry (no motion; SELECT=0 to only read)")
     def cmd_TC_DETECT(self, gcmd):
         if self.tool_probe_endstop is not None:
             # Also selects the active Z probe, as the toolchanger expects
@@ -260,6 +285,19 @@ class ToolchangerUI:
         gcmd.respond_info("Tool sensors: %s" % (', '.join(
             'T%s %s' % (n, 'in dock' if docked else 'ON GANTRY')
             for n, docked in sorted(probes.items(), key=lambda i: int(i[0]))),))
+        # A tool put on by hand: make the toolchanger select it, so the next
+        # dropoff or pickup knows it is there (INITIALIZE_TOOLCHANGER only
+        # applies the tool's settings, it doesn't move).
+        tc = self.toolchanger
+        detected = self._detected_tool(probes)
+        if (gcmd.get_int('SELECT', 1) and tc is not None and detected >= 0
+                and tc.status in ('ready', 'uninitialized')
+                and not self._is_printing(self.reactor.monotonic())):
+            active = tc.active_tool.tool_number if tc.active_tool else -1
+            if detected != active:
+                gcmd.respond_info("Selecting T%d (it is on the gantry)"
+                                  % (detected,))
+                self.gcode.run_script_from_command('INITIALIZE_TOOLCHANGER')
 
     def _last_query(self):
         tpe = self.tool_probe_endstop

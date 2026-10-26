@@ -40,6 +40,14 @@ export const tools = computed(() => buildTools(status.value))
 export const mcus = computed(() => allMcus(status.value))
 export const tc = computed(() => status.value.toolchanger ?? {})
 export const safety = computed(() => status.value['gcode_macro _TC_SAFETY'] ?? null)
+// A tool the sensors put on the gantry that the toolchanger hasn't selected
+// (e.g. placed by hand after a dropoff). Picking up another tool then would
+// carry it into a dock, so the page has to adopt or dock it first.
+export const unadoptedTool = computed<number | null>(() => {
+  const d = status.value.toolchanger_ui?.detected_tool
+  const sel = tc.value.tool_number
+  return typeof d === 'number' && d >= 0 && d !== sel ? d : null
+})
 // A probing/homing move is running: the active tool's Tap sensor then reads "docked"
 export const probing = computed(() => !!status.value.toolchanger_ui?.probing)
 export const homed = computed(() => status.value.toolhead?.homed_axes ?? '')
@@ -170,6 +178,31 @@ export async function detectTools(): Promise<number[]> {
   return Object.entries(q)
     .filter(([, docked]) => !docked)
     .map(([n]) => Number(n))
+}
+
+/**
+ * Read the sensors; TC_DETECT also selects a tool that was put on the gantry
+ * by hand (no motion). Returns the tool the toolchanger has selected
+ * afterwards (-1 for none).
+ */
+export async function detectTool(): Promise<number> {
+  try {
+    await run('TC_DETECT', 'Detect tool')
+    const s = (await mr.call('printer.objects.query', { objects: { toolchanger: ['tool_number'] } })).status
+    return s.toolchanger?.tool_number ?? -1
+  } catch {
+    return -1 // the error is in the console
+  }
+}
+
+/** Dock tool `n`, selecting it first if it was put on the gantry by hand. */
+export async function dockTool(n: number) {
+  const selected = tc.value.tool_number === n ? n : await detectTool()
+  if (selected !== n) {
+    log(`!! T${n} isn't the tool on the gantry, so it wasn't docked. Check the sensors (Detect tool).`, 'error')
+    return false
+  }
+  return tryRun('UNSELECT_TOOL RESTORE_AXIS=', `Dock T${n}`)
 }
 
 /** Run `script` only if exactly one tool is on the gantry; otherwise ask. */

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
-import { homed, isPrinting, probing, realign, safety, state, tc } from '../store'
+import { homed, isPrinting, probing, realign, safety, state, tc, unadoptedTool } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
 defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
@@ -13,6 +13,10 @@ const otherSelected = computed(() => {
   const n = tc.value.tool_number
   return typeof n === 'number' && n >= 0 && n !== props.tool.number ? `T${n}` : ''
 })
+// On the gantry (sensor) but not selected: placed by hand
+const unselected = computed(() => !t.value.active && unadoptedTool.value === props.tool.number)
+// Some other tool is on the gantry unselected: a pickup would carry it into a dock
+const blockedBy = computed(() => (unadoptedTool.value !== null && unadoptedTool.value !== props.tool.number ? `T${unadoptedTool.value}` : ''))
 const hot = computed(() => (t.value.temp ?? 0) > 50)
 const failed = computed(() => !!safety.value?.last_error && safety.value?.last_error_tool === props.tool.number)
 const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.value.offset.z)
@@ -26,6 +30,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       <span v-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
       <span v-else-if="t.active && probing" class="pill ok" title="The nozzle is touching the bed, which presses the Tap sensor"><span class="dot" />On gantry, probing</span>
       <span v-else-if="t.active" class="pill err" title="The toolchanger says this tool is mounted, but its sensor says it's in a dock (pressed, not seated, or not connected)"><span class="dot" />On gantry? sensor says dock</span>
+      <span v-else-if="unselected && !otherSelected" class="pill warn" title="Its sensor says it's on the gantry, but the toolchanger hasn't selected it (put on by hand). Press Detect tool, or Dock to put it away."><span class="dot" />On gantry, not selected</span>
       <span v-else-if="t.where === 'gantry' && otherSelected" class="pill warn" :title="`Its sensor says it's on the gantry, but the toolchanger has ${otherSelected} selected. It may be sitting crooked in its dock, or press Detect tool / Initialize changer.`"><span class="dot" />On gantry? {{ otherSelected }} is selected</span>
       <span v-else-if="t.where === 'gantry'" class="pill ok" title="Its sensor says it's on the gantry. The toolchanger selects it when you home or press Initialize changer."><span class="dot" />On gantry</span>
       <span v-else class="pill"><span class="dot" />{{ t.where === 'dock' ? 'In dock' : 'Unknown' }}</span>
@@ -66,8 +71,9 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
       </ul>
     </div>
     <footer class="row foot">
-      <button v-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (gantry ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
-      <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" @click="$emit('select')">Pick up {{ t.label }}</button>
+      <button v-if="unselected" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Select ${t.label} (it was put on by hand), then put it in its dock`" @click="$emit('park')">Dock {{ t.label }}</button>
+      <button v-else-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (gantry ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
+      <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0 || !!blockedBy" :title="blockedBy ? `${blockedBy} is on the gantry but not selected: dock it or press Detect tool first` : ''" @click="$emit('select')">Pick up {{ t.label }}</button>
       <button v-if="failed" class="primary" title="The last pickup of this tool failed: open the alignment wizard" @click="realign(t.number)">Realign {{ t.label }}</button>
       <button @click="$emit('edit')">Edit</button>
       <button @click="$emit('dock')">{{ t.warnings.length ? 'Find dock' : 'Calibrate' }}</button>
