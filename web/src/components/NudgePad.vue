@@ -37,8 +37,27 @@ const WORDS: Record<string, [string, string]> = {
   Z: ['down', 'up'],
 }
 
+// Klipper's "Move out of range" is a command error, and the toolchanger treats any
+// command error as the end of docking mode (it forgets the tool too). Stop at the
+// axis limit instead of sending a move past it.
+function limit(axis: 'X' | 'Y' | 'Z', d: number) {
+  const th = status.value.toolhead ?? {}
+  const i = 'XYZ'.indexOf(axis)
+  const p = th.position?.[i]
+  const lo = th.axis_minimum?.[i]
+  const hi = th.axis_maximum?.[i]
+  if (typeof p !== 'number' || typeof lo !== 'number' || typeof hi !== 'number') return { d, edge: null }
+  const to = Math.min(hi, Math.max(lo, p + d))
+  return { d: +(to - p).toFixed(3), edge: to === p + d ? null : d < 0 ? lo : hi }
+}
+
 async function move(axis: 'X' | 'Y' | 'Z', sign: 1 | -1) {
-  const d = +(step.value * sign).toFixed(3)
+  const want = +(step.value * sign).toFixed(3)
+  const { d, edge } = limit(axis, want)
+  if (Math.abs(d) < 0.001) {
+    last.value = { ok: false, text: `${axis} is at its limit (${edge}), so it can't move further ${WORDS[axis][sign > 0 ? 1 : 0]}. Nothing moved.` }
+    return
+  }
   const before = pos.value[axis]
   busy.value = true
   last.value = null
@@ -49,7 +68,7 @@ async function move(axis: 'X' | 'Y' | 'Z', sign: 1 | -1) {
     await new Promise((r) => setTimeout(r, 400))
     last.value = {
       ok: true,
-      text: `Moved ${step.value} mm ${WORDS[axis][sign > 0 ? 1 : 0]}: ${axis} ${before.toFixed(2)} → ${pos.value[axis].toFixed(2)}`,
+      text: `Moved ${Math.abs(d)} mm ${WORDS[axis][sign > 0 ? 1 : 0]}: ${axis} ${before.toFixed(2)} → ${pos.value[axis].toFixed(2)}${edge !== null ? ` (stopped at the ${axis} limit, ${edge})` : ''}`,
     }
     emit('moved', axis, d)
   } catch (e: any) {

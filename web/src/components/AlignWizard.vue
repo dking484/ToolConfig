@@ -117,6 +117,24 @@ async function teachStart() {
     moved.value = { X: 0, Y: 0, Z: 0 }
   }, 'teach')
 }
+// Any command error (a move past an axis limit, a typo in the console) makes the
+// toolchanger leave docking mode and forget the active tool. Put both back, with
+// no motion: the tool being taught is still on the gantry.
+const dockingLost = computed(() => ['teach', 'teach-recorded', 'fit', 'adjust', 'test'].includes(step.value) && tc.value.status !== 'changing')
+async function ensureDocking() {
+  if (tc.value.status === 'changing') {
+    if (tools.value.find((t) => t.number === n.value)?.active) return
+    throw new Error(`Klipper is in docking mode with ${onCarriage.value?.label ?? 'no tool'} selected, not ${label.value}. Stop, then start again.`)
+  }
+  if (!tools.value.find((t) => t.number === n.value)?.active) {
+    await run(`INITIALIZE_TOOLCHANGER T=${n.value}`, `Select ${label.value} (no motion)`)
+  }
+  await run('ENTER_DOCKING_MODE', 'Docking mode (no motion)')
+  await settle()
+}
+async function restoreDocking() {
+  await act(ensureDocking)
+}
 async function teachSafeY() {
   await act(() => run(`G90\nG0 Y${safeY.value} F3000\nM400`, 'Go to safe Y'))
 }
@@ -133,6 +151,7 @@ async function teachRecord() {
   const z = +pos.value.z.toFixed(2)
   if (!confirm(`Record X${x} Y${y} Z${z} as ${label.value}'s dock position?\n\nIt's applied now. It is written to the config file only after the test passes.`)) return
   await act(async () => {
+    await ensureDocking()
     for (const [a, v] of [['x', x], ['y', y], ['z', z]] as const) {
       await run(`SET_TOOL_PARAMETER T=${n.value} PARAMETER=params_park_${a} VALUE=${v}`, `Set ${label.value} dock ${a.toUpperCase()}`)
     }
@@ -186,10 +205,20 @@ async function test() {
   error.value = ''
   note.value = ''
   try {
+    await ensureDocking()
+  } catch (e: any) {
+    error.value = e.message
+    busy.value = false
+    return
+  }
+  try {
     await run('TOOL_ALIGN_TEST', `Test ${label.value} dock position`)
     step.value = 'save'
-  } catch {
-    step.value = 'failed'
+  } catch (e: any) {
+    // Only a pickup that ran and wasn't verified is a failed test; anything else
+    // (the test refused to start) is shown as it is.
+    if (tc.value.status === 'error' || /no tool detected|tool change failed/i.test(e.message)) step.value = 'failed'
+    else error.value = e.message
   } finally {
     busy.value = false
   }
@@ -403,6 +432,12 @@ watch(() => state.wizardEntry, consumeEntry)
       <span class="grow" />
       <span v-if="totalMoved" class="mono">moved {{ totalMoved }}</span>
       <span class="mono">at X {{ f(pos.x) }} Y {{ f(pos.y) }} Z {{ f(pos.z) }}<template v-if="isPickup && !isNaN(zRel)"> ({{ zRel >= 0 ? '+' : '' }}{{ f(zRel) }} vs dock)</template></span>
+    </div>
+
+    <div v-if="dockingLost && !busy && !state.busy" class="callout warn row">
+      <span class="grow"><b>Klipper left docking mode</b> (any error does that, such as a move past an axis limit), and the toolchanger may have lost track of {{ label }}. Nothing moved.
+        Record and Test put it back on their own; or put it back now.</span>
+      <button class="blue" @click="restoreDocking">Restore docking mode (no motion)</button>
     </div>
 
     <!-- ===================== CHECK / START ===================== -->
