@@ -5,6 +5,8 @@
 #    after a failed pickup left the toolchanger pointing at a tool that is
 #    not actually on the carriage.
 #  - TC_DETECT: read every tool sensor now, whichever kind the printer has.
+#  - Auto-select: a tool put on the empty gantry by hand is selected once its
+#    sensor has settled (outside prints and tool changes; no motion).
 #  - Probe heat cooldown: easy's _TAP_PROBE_ACTIVATE heats the nozzle to
 #    150C before every Tap probe and never turns it off, so outside a print a
 #    tool stays hot until idle_timeout. Heat it only turned on is turned back
@@ -25,6 +27,9 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import sys
+
+# Seconds a tool's sensor must be steady before a hand-placed tool is selected
+AUTO_SELECT_SETTLE = 1.5
 
 
 def _probe_tool_number(probe):
@@ -74,6 +79,10 @@ class ToolchangerUI:
         # the way through, so the UI can show them without polling. The
         # [tool_probe] sections come before this one, so the object exists.
         self.probe_states = {}
+        self.auto_select = config.getboolean('auto_select', True)
+        self.sensor_change_time = -99.
+        self.auto_select_timer = self.reactor.register_timer(
+            self._auto_select_timer)
         tpe = self.printer.lookup_object('tool_probe_endstop', None)
         if tpe is None and config.has_section('tool_probe_endstop'):
             tpe = self.printer.load_object(config, 'tool_probe_endstop')
@@ -84,6 +93,7 @@ class ToolchangerUI:
                 n = _probe_tool_number(probe)
                 if n is not None:
                     self.probe_states[str(n)] = bool(is_triggered)
+                    self._sensor_changed()
                 return orig(probe, eventtime, is_triggered)
             tpe.note_probe_triggered = note_probe_triggered
             # A dropped tool pauses the print and turns the hotends off, but
@@ -113,6 +123,8 @@ class ToolchangerUI:
             self._wrap_command(name, self._guard_stray_tool)
         if self.tool_probe_endstop is not None:
             self._wrap_command('DETECT_ACTIVE_TOOL_PROBE', self._detect_probes)
+        # A tool already on the gantry at startup counts as just placed
+        self._sensor_changed()
 
     def _detect_probes(self, orig, gcmd):
         # Macros run DETECT_ACTIVE_TOOL_PROBE too; keep the live map in step
@@ -187,7 +199,7 @@ class ToolchangerUI:
         for heater, temp in heated.items():
             # Leave a temperature someone set since then alone
             if self._heater_target(heater, eventtime) == temp:
-                self.gcode.run_script(
+                self._run_from_timer(
                     "SET_HEATER_TEMPERATURE HEATER=%s TARGET=0\n"
                     "RESPOND MSG=\"%s turned off (only heated for probing)\""
                     % (heater, heater))
@@ -205,6 +217,44 @@ class ToolchangerUI:
         # moment for that.
         return (self.homing_move_active
                 or eventtime - self.homing_move_end_time < 2.)
+
+    def _sensor_changed(self):
+        if not self.auto_select:
+            return
+        now = self.reactor.monotonic()
+        self.sensor_change_time = now
+        self.reactor.update_timer(self.auto_select_timer,
+                                  now + AUTO_SELECT_SETTLE)
+
+    def _auto_select_timer(self, eventtime):
+        # A tool put on the empty gantry by hand: select it (TC_DETECT runs
+        # INITIALIZE_TOOLCHANGER, which doesn't move), so docking and
+        # pickups know it is there. Only when nothing is selected and
+        # nothing is going on; a tool change, alignment (docking mode) or
+        # failed pickup leaves the toolchanger in another state.
+        if eventtime - self.sensor_change_time < AUTO_SELECT_SETTLE - .01:
+            return self.sensor_change_time + AUTO_SELECT_SETTLE
+        tc = self.toolchanger
+        if (tc is None or tc.active_tool is not None
+                or tc.status not in ('ready', 'uninitialized')
+                or self._is_printing(eventtime) or self._probing(eventtime)
+                or self._detected_tool(self._probe_status()) < 0):
+            return self.reactor.NEVER
+        idle = self.printer.lookup_object('idle_timeout', None)
+        if ((idle is not None
+             and idle.get_status(eventtime)['state'] == 'Printing')
+                or self.gcode.get_mutex().test()):
+            return eventtime + 1.  # check again once the printer is idle
+        self._run_from_timer("TC_DETECT")
+        return self.reactor.NEVER
+
+    def _run_from_timer(self, script):
+        # An error escaping a reactor timer would shut Klipper down
+        try:
+            self.gcode.run_script(script)
+        except Exception as e:
+            self.gcode.respond_info("ToolConfig: %s failed: %s"
+                                    % (script.split()[0], e))
 
     def _tools(self):
         tc = self.toolchanger
