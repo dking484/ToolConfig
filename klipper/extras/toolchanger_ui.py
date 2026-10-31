@@ -19,6 +19,13 @@
 #  - Z_OFFSET_APPLY_PROBE (Mainsail's Z offset "Save") saves the adjustment
 #    to the tool that is on, in its config file, instead of the
 #    [tool_probe_endstop] z_offset nothing reads (save_babysteps_to_tool).
+#  - Z after a failed tool change or a crash: TC_Z_SUSPECT marks Z as not
+#    trustworthy (a stalled gantry loses steps), RESUME refuses until
+#    TC_REHOME_Z has re-set Z by probing two spots clear of the print with
+#    the tool on the gantry, or Z is homed again.
+#  - After any G-code error klipper-toolchanger forgets its tool; the tool
+#    on the gantry is selected again (no motion), and the error is kept in
+#    the status for the web page.
 #  - printer.toolchanger_ui status: the toolchanger's error message, which
 #    klipper-toolchanger does not publish itself, and one view of the tool
 #    sensors for the macros and the web page.
@@ -42,6 +49,10 @@ AUTO_SELECT_SETTLE = 1.5
 Z_MEASURE_SPREAD = 0.02
 # TC_CHECK_Z: Z zeros of two tools further apart than this need re-measuring
 Z_CHECK_LIMIT = 0.02
+# TC_REHOME_Z: probe spots stay this far from the print's outline (mm), and
+# the second spot may disagree with the first by this much
+REHOME_MARGIN = 15.
+REHOME_TOLERANCE = 0.1
 
 
 def _probe_tool_number(probe):
@@ -80,6 +91,40 @@ def babystep_changes(delta, active, ref, probe_z, active_gcode_z):
     if active == ref:
         return {n: {'probe_z': round(z - delta, 3)} for n, z in probe_z.items()}
     return {active: {'gcode_z': round(active_gcode_z + delta, 3)}}
+
+
+def rehome_points(candidates, outlines, margin, in_mesh=None):
+    """Two probe spots for TC_REHOME_Z, as far apart as possible.
+
+    candidates: (x, y) spots to choose from; outlines: the print's objects
+    as lists of (x, y). A spot must be `margin` outside every object's
+    bounding box. Spots inside the bed mesh (in_mesh(x, y)) are preferred:
+    the mesh says how high the bed is there. Returns 0 to 2 spots."""
+    boxes = [(min(p[0] for p in o), min(p[1] for p in o),
+              max(p[0] for p in o), max(p[1] for p in o))
+             for o in outlines if o]
+    clear = []
+    for x, y in candidates:
+        p = (float(x), float(y))
+        if p not in clear and all(
+                p[0] < x0 - margin or p[0] > x1 + margin
+                or p[1] < y0 - margin or p[1] > y1 + margin
+                for x0, y0, x1, y1 in boxes):
+            clear.append(p)
+    inside = [p for p in clear if in_mesh is None or in_mesh(*p)]
+    pool = inside if len(inside) >= 2 else clear
+    if len(pool) < 2:
+        return pool
+    pairs = [(a, b) for i, a in enumerate(pool) for b in pool[i + 1:]]
+    return list(max(pairs, key=lambda ab: (ab[0][0] - ab[1][0]) ** 2
+                    + (ab[0][1] - ab[1][1]) ** 2))
+
+
+def rehome_shift(probe_z_offset, bed_z, trigger):
+    """How far Z must move so the probe's trigger at a spot reads what homing
+    there would give: its z_offset plus the bed's height there (the mesh is
+    taken in the homed frame). Negative = the nozzle is lower than Z says."""
+    return round(probe_z_offset + bed_z - trigger, 4)
 
 
 # ---- Klipper config files (same rules as web/src/lib/cfgEdit.ts) ----------
@@ -235,7 +280,24 @@ class ToolchangerUI:
         self.printer.register_event_handler('homing:homing_move_end',
                                             self._homing_move_end)
         self.printer.register_event_handler('gcode:command_error',
-                                            self._homing_move_end)
+                                            self._command_error)
+        # Last G-code error, for the web page: klipper-toolchanger forgets
+        # its tool on every error, so the page otherwise only sees "not
+        # initialized". The message is the "!!" line printed just before.
+        self.last_error = None
+        self.last_error_line = ''
+        self.error_reselect = False
+        self.gcode.register_output_handler(self._gcode_output)
+        # Why Z can't be trusted right now ('' = it can): set by
+        # TC_Z_SUSPECT, cleared by homing Z or TC_REHOME_Z
+        self.z_suspect = ''
+        self.z_rehome = None
+        self.gcode.register_command(
+            'TC_Z_SUSPECT', self.cmd_TC_Z_SUSPECT,
+            desc=self.cmd_TC_Z_SUSPECT_help)
+        self.gcode.register_command(
+            'TC_REHOME_Z', self.cmd_TC_REHOME_Z,
+            desc=self.cmd_TC_REHOME_Z_help)
         self.gcode.register_command(
             'TC_CLEAR_ACTIVE_TOOL', self.cmd_TC_CLEAR_ACTIVE_TOOL,
             desc=self.cmd_TC_CLEAR_ACTIVE_TOOL_help)
@@ -403,6 +465,21 @@ class ToolchangerUI:
         self.homing_move_active = False
         self.homing_move_end_time = self.reactor.monotonic()
 
+    def _gcode_output(self, msg):
+        if msg.startswith('!! '):
+            self.last_error_line = msg[3:].strip()
+
+    def _command_error(self, *args):
+        # The error may have stopped a probing move
+        self._homing_move_end()
+        self.last_error = {'message': self.last_error_line,
+                           'time': time.time(), 'reselected': -1}
+        # klipper-toolchanger forgets the active tool on every command
+        # error; select the tool on the gantry again once things are idle
+        if self.auto_select:
+            self.error_reselect = True
+            self._sensor_changed()
+
     def _probing(self, eventtime):
         # The sensor releases once the nozzle lifts after a probe; allow a
         # moment for that.
@@ -422,20 +499,29 @@ class ToolchangerUI:
         # INITIALIZE_TOOLCHANGER, which doesn't move), so docking and
         # pickups know it is there. Only when nothing is selected and
         # nothing is going on; a tool change, alignment (docking mode) or
-        # failed pickup leaves the toolchanger in another state.
+        # failed pickup leaves the toolchanger in another state. The same
+        # after a G-code error made the toolchanger forget its tool.
         if eventtime - self.sensor_change_time < AUTO_SELECT_SETTLE - .01:
             return self.sensor_change_time + AUTO_SELECT_SETTLE
         tc = self.toolchanger
+        detected = self._detected_tool(self._probe_status())
         if (tc is None or tc.active_tool is not None
                 or tc.status not in ('ready', 'uninitialized')
-                or self._is_printing(eventtime) or self._probing(eventtime)
-                or self._detected_tool(self._probe_status()) < 0):
+                or self._is_printing(eventtime) or detected < 0):
+            self.error_reselect = False
             return self.reactor.NEVER
         idle = self.printer.lookup_object('idle_timeout', None)
-        if ((idle is not None
-             and idle.get_status(eventtime)['state'] == 'Printing')
+        if (self._probing(eventtime)
+                or (idle is not None
+                    and idle.get_status(eventtime)['state'] == 'Printing')
                 or self.gcode.get_mutex().test()):
             return eventtime + 1.  # check again once the printer is idle
+        if self.error_reselect and self.last_error is not None:
+            self.last_error['reselected'] = detected
+            self.gcode.respond_info(
+                "ToolConfig: the toolchanger forgot T%d after that error;"
+                " selecting it again (no motion)" % (detected,))
+        self.error_reselect = False
         self._run_from_timer("TC_DETECT")
         return self.reactor.NEVER
 
@@ -723,6 +809,142 @@ class ToolchangerUI:
                 "Good: homing with either gives the same Z." if good else
                 "Too far apart: measure T%d again (Z offsets tab)." % (n,)))
 
+    # ---- Z after a failed tool change ---------------------------------------
+    # A pickup that jams in its dock can stall the gantry: the Z motors skip
+    # and Z is off by a millimetre or more, while the printer still counts
+    # as homed. Printing on would push the nozzle into the bed.
+    cmd_TC_Z_SUSPECT_help = ("Mark Z as untrustworthy until it is homed or"
+                             " TC_REHOME_Z runs: MSG=<why> (CLEAR=1 unmarks)")
+    def cmd_TC_Z_SUSPECT(self, gcmd):
+        if gcmd.get_int('CLEAR', 0):
+            self.z_suspect = ''
+        else:
+            self.z_suspect = gcmd.get('MSG', 'Z may have shifted')
+
+    def _bed_mesh(self):
+        """(bed height at x, y; is x, y inside the mesh), from the active
+        bed mesh. Without one the bed counts as flat at the homing height."""
+        bm = self.printer.lookup_object('bed_mesh', None)
+        zm = None
+        if bm is not None:
+            zm = bm.get_mesh() if hasattr(bm, 'get_mesh') \
+                else getattr(bm, 'z_mesh', None)
+        if zm is None:
+            return (lambda x, y: 0.), None
+        p = zm.get_mesh_params()
+        return zm.calc_z, (lambda x, y: p['min_x'] <= x <= p['max_x']
+                           and p['min_y'] <= y <= p['max_y'])
+
+    def _rehome_points(self, gcmd, th, in_mesh):
+        if gcmd.get_float('X', None) is not None:
+            pts = [(gcmd.get_float('X'), gcmd.get_float('Y'))]
+            if gcmd.get_float('X2', None) is not None:
+                pts.append((gcmd.get_float('X2'), gcmd.get_float('Y2')))
+            return pts
+        now = self.reactor.monotonic()
+        settings = self.printer.lookup_object('configfile').get_status(
+            now)['settings']
+        lo, hi = th['axis_minimum'], th['axis_maximum']
+        cands = [tuple(p) for p in
+                 settings.get('quad_gantry_level', {}).get('points', [])]
+        mesh = settings.get('bed_mesh', {})
+        if 'mesh_min' in mesh and 'mesh_max' in mesh:
+            (x0, y0), (x1, y1) = mesh['mesh_min'], mesh['mesh_max']
+            cands += [(x0, y0), (x0, y1), (x1, y1), (x1, y0)]
+        cands = [p for p in cands
+                 if lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1]]
+        eo = self.printer.lookup_object('exclude_object', None)
+        objects = eo.get_status(now).get('objects', []) if eo else []
+        outlines = [o.get('polygon') or [] for o in objects]
+        if not objects and self._is_printing(now):
+            gcmd.respond_info("The print's outline is unknown (label objects"
+                              " in the slicer): probing the bed corners")
+        return rehome_points(cands, outlines, REHOME_MARGIN, in_mesh)
+
+    cmd_TC_REHOME_Z_help = (
+        "Re-set Z with the tool on the gantry by probing two spots clear of"
+        " the print (after a failed tool change or a crash)"
+        " [X= Y= X2= Y2=] [CLEARANCE=10]")
+    def cmd_TC_REHOME_Z(self, gcmd):
+        tc = self.toolchanger
+        toolhead = self.printer.lookup_object('toolhead')
+        now = self.reactor.monotonic()
+        th = toolhead.get_status(now)
+        probe_obj = self.printer.lookup_object('probe', None)
+        if th['homed_axes'] != 'xyz':
+            raise gcmd.error("The printer isn't homed: home it (G28) instead")
+        if tc is None or tc.status == 'changing':
+            raise gcmd.error("Not during a tool change")
+        run = self.gcode.run_script_from_command
+        if tc.status != 'ready' or tc.active_tool is None:
+            # Select the tool that is on the gantry (no motion)
+            run("TC_RECOVER")
+        n = self._active_number()
+        probes = self._registered_probes()
+        if n not in probes or probe_obj is None:
+            raise gcmd.error("Put a tool with a probe on the gantry first")
+        bed_z, in_mesh = self._bed_mesh()
+        points = self._rehome_points(gcmd, th, in_mesh)
+        if len(points) < 2:
+            raise gcmd.error("No two probe spots clear of the print were found;"
+                             " give them with X= Y= X2= Y2=")
+        clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
+        z_off = self._probe_z_offset(probes[n])
+        heater = toolhead.get_extruder().get_name()
+        temp = self._heater_target(heater, now)
+        gcode_move = self.printer.lookup_object('gcode_move')
+        start = gcode_move.get_status(now)['gcode_position']
+        # Travel above wherever the toolhead is now (a pause parks it above
+        # the print); only go down to probe, at spots clear of it
+        travel = max(start[2], clearance)
+
+        def probe_at(p):
+            run("G0 X%.3f Y%.3f F12000\nG0 Z%.3f F1200\nPROBE"
+                % (p[0], p[1], clearance))
+            z = probe_obj.get_status(self.reactor.monotonic())['last_z_result']
+            run("G0 Z%.3f F1200" % (travel,))
+            return z
+
+        run("SAVE_GCODE_STATE NAME=_tc_rehome_z\nG90\nG0 Z%.3f F1200"
+            % (travel,))
+        try:
+            shift = rehome_shift(z_off, bed_z(*points[0]), probe_at(points[0]))
+            toolhead.wait_moves()
+            pos = toolhead.get_position()
+            pos[2] += shift
+            toolhead.set_position(pos)
+            gcode_move.reset_last_position()
+            check = probe_at(points[1]) - (z_off + bed_z(*points[1]))
+            run("G0 X%.3f Y%.3f F12000" % (start[0], start[1]))
+        finally:
+            run("RESTORE_GCODE_STATE NAME=_tc_rehome_z MOVE=0")
+        self.z_rehome = {'tool': n, 'shift': shift, 'check': round(check, 4),
+                         'points': points, 'time': time.time()}
+        if self._is_printing(self.reactor.monotonic()) and temp and \
+                self._heater_target(heater, self.reactor.monotonic()) != temp:
+            # Probing cooled the nozzle to probe temperature
+            gcmd.respond_info("Heating %s back to %.0f C" % (heater, temp))
+            run("SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f\n"
+                "TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f"
+                % (heater, temp, heater, temp - 2.))
+        where = "X%.0f Y%.0f" % points[0]
+        there = "X%.0f Y%.0f" % points[1]
+        if abs(check) > REHOME_TOLERANCE:
+            self.z_suspect = (
+                "Z was re-set with T%d at %s, but %s disagrees by %+.2f mm:"
+                " the gantry may be out of level" % (n, where, there, check))
+            raise gcmd.error(
+                "%s. Don't resume: cancel the print, or level the gantry"
+                " (QGL) and home again." % (self.z_suspect,))
+        self.z_suspect = ''
+        gcmd.respond_info(
+            "Z re-set with T%d: corrected by %+.3f mm (negative: the nozzle"
+            " was closer to the bed than Z said), probed at %s; the check at"
+            " %s agrees within %.3f mm.%s" % (
+                n, shift, where, there, abs(check),
+                " You can resume." if self._is_printing(
+                    self.reactor.monotonic()) else ""))
+
     # ---- Saving the Z offset adjustment (babysteps) -------------------------
     # Mainsail's "Save" next to the Z offset runs Z_OFFSET_APPLY_PROBE, which
     # writes the [tool_probe_endstop] z_offset nothing reads. Save it to the
@@ -798,8 +1020,10 @@ class ToolchangerUI:
 
     def _home_rails_end(self, homing_state, rails):
         if 2 in homing_state.get_axes():
-            # Z set from the probes again: nothing saved is pending
+            # Z set from the probes again: nothing saved is pending, and
+            # Z is trustworthy again
             self.babystep_saved = 0.
+            self.z_suspect = ''
 
     # ---- Writing tool config files -----------------------------------------
     def _save_options(self, edits):
@@ -928,6 +1152,11 @@ class ToolchangerUI:
             'z_measure': self.z_measure,
             # last TC_CHECK_Z, or None
             'z_check': self.z_check,
+            # why Z can't be trusted ('' = it can), last TC_REHOME_Z
+            'z_suspect': self.z_suspect,
+            'z_rehome': self.z_rehome,
+            # last G-code error {message, time, reselected tool or -1}
+            'last_error': self.last_error,
             # Z offset adjustment (babysteps) not saved yet
             'babystep_unsaved': round(self.printer.lookup_object(
                 'gcode_move').get_status(eventtime)['homing_origin'][2]

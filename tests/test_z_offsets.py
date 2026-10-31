@@ -10,6 +10,10 @@ toolchanger_ui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchanger_ui)
 z_proposals = toolchanger_ui.z_proposals
 babystep_changes = toolchanger_ui.babystep_changes
+rehome_points = toolchanger_ui.rehome_points
+rehome_shift = toolchanger_ui.rehome_shift
+
+QGL = [(50, 25), (50, 275), (300, 275), (300, 25)]
 
 
 class ZProposals(unittest.TestCase):
@@ -50,6 +54,36 @@ class Babysteps(unittest.TestCase):
         self.assertEqual(
             babystep_changes(-0.02, 1, 0, {0: -1.0, 1: -1.814}, -0.819),
             {1: {'gcode_z': -0.839}})
+
+
+class Rehome(unittest.TestCase):
+    def test_shift_when_z_lost_steps(self):
+        # 2026-10-30: after a failed T4 pickup T0 triggered at +0.31 where
+        # homing makes it trigger at its z_offset -1.0: the nozzle was 1.31
+        # closer to the bed than Z said
+        self.assertEqual(rehome_shift(-1.0, 0., 0.31), -1.31)
+
+    def test_shift_uses_bed_height(self):
+        self.assertEqual(rehome_shift(-0.969, -0.08, -1.049), 0.)
+
+    def test_furthest_pair_without_a_print(self):
+        self.assertEqual(rehome_points(QGL, [], 15.),
+                         [(50., 25.), (300., 275.)])
+
+    def test_skips_spots_near_the_print(self):
+        part = [(30, 10), (200, 10), (200, 150), (30, 150)]
+        self.assertEqual(rehome_points(QGL, [part], 15.),
+                         [(50., 275.), (300., 25.)])
+
+    def test_prefers_spots_inside_the_mesh(self):
+        in_mesh = lambda x, y: 40 <= x <= 310 and 40 <= y <= 310
+        # (50, 25) and (300, 25) lie outside the mesh
+        pts = rehome_points(QGL + [(40, 40), (310, 310)], [], 15., in_mesh)
+        self.assertEqual(pts, [(40., 40.), (310., 310.)])
+
+    def test_too_few_clear_spots(self):
+        bed = [(0, 0), (350, 0), (350, 350), (0, 350)]
+        self.assertEqual(rehome_points(QGL, [bed], 15.), [])
 
 
 if __name__ == '__main__':
