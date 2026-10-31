@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { emergencyStop, firmwareRestart, homed, isPrinting, lastChange, printState, runWithTool, state, status, tc, theme, undoLastChange } from './store'
+import { emergencyStop, firmwareRestart, homed, isPrinting, lastChange, lostBoard, printState, runWithTool, state, status, tc, theme, undoLastChange } from './store'
 
 async function undo() {
   if (!lastChange.value) return
@@ -44,8 +44,6 @@ window.addEventListener('hashchange', () => (tab.value = readTab()))
 const klippyClass = computed(() => (state.klippy === 'ready' ? 'ok' : state.klippy === 'startup' ? 'warn' : 'err'))
 const tcClass = computed(() => ({ ready: 'ok', changing: 'info', initializing: 'info', error: 'err' })[tc.value.status as string] ?? 'warn')
 const qgl = computed(() => status.value.quad_gantry_level?.applied)
-// "mcu 'EBBT4': Unable to connect" after a board swap: point to the fix
-const lostBoard = computed(() => state.klippyMessage.match(/mcu '([^']+)': Unable to connect/)?.[1] ?? '')
 </script>
 
 <template>

@@ -31,6 +31,7 @@ export interface ToolInfo {
   mcu: McuInfo | null
   color: string | null // gcode_macro Tn variable_color (Mainsail convention)
   warnings: string[]
+  source: 'klipper' | 'config' // live status, or read from the files while Klipper is down
 }
 
 export interface McuInfo {
@@ -134,6 +135,7 @@ export function buildTools(status: Status): ToolInfo[] {
       mcu: mcuName ? mcuInfo(status, mcuName) : null,
       color: normalizeColor(status[`gcode_macro T${number}`]?.color),
       warnings,
+      source: 'klipper',
     }
   })
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
-import { homed, isPrinting, probing, realign, safety, state, tc, unadoptedTool } from '../store'
+import { homed, isPrinting, lostBoard, probing, realign, safety, state, tc, unadoptedTool } from '../store'
 
 const props = defineProps<{ tool: ToolInfo }>()
 defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
@@ -56,9 +56,14 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
             <td>Board</td>
             <td>
               <template v-if="t.mcu">
-                <span class="pill" :class="t.mcu.connected ? 'ok' : 'err'"><span class="dot" />{{ t.mcu.name }}</span>
+                <span
+                  class="pill"
+                  :class="t.source === 'config' ? (lostBoard === t.mcu.name ? 'err' : '') : t.mcu.connected ? 'ok' : 'err'"
+                  :title="t.source === 'config' ? (lostBoard === t.mcu.name ? `Klipper can't reach ${t.mcu.name}` : 'Unknown while Klipper is down') : ''"
+                  ><span class="dot" />{{ t.mcu.name }}</span
+                >
                 <span class="mono muted"> {{ t.mcu.canbusUuid ? 'CAN ' + t.mcu.canbusUuid : t.mcu.serial ? 'USB' : '' }}</span>
-                <div class="muted small">{{ t.mcu.mcuType }} · {{ t.mcu.version ?? 'no firmware info' }}</div>
+                <div v-if="t.source === 'klipper'" class="muted small">{{ t.mcu.mcuType }} · {{ t.mcu.version ?? 'no firmware info' }}</div>
               </template>
               <span v-else class="muted">main board</span>
             </td>

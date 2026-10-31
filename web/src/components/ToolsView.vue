@@ -15,6 +15,7 @@ const disabled = ref<string[]>([])
 const error = ref('')
 // The tool on the gantry: selected by the toolchanger, or put there by hand
 const active = computed(() => tools.value.find((t) => t.active) ?? tools.value.find((t) => t.number === unadoptedTool.value))
+const fromConfig = computed(() => tools.value.some((t) => t.source === 'config'))
 
 async function refreshDisabled() {
   disabled.value = (await listConfigDir(DISABLED_DIR)).filter((f) => f.endsWith('.cfg')).sort()
@@ -66,13 +67,17 @@ async function enable(file: string) {
 <template>
   <section class="stack">
     <div class="row">
-      <h2 class="grow">{{ tools.length }} tools <span class="muted">· active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span></h2>
+      <h2 class="grow">{{ tools.length }} tools <span v-if="!fromConfig" class="muted">· active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span></h2>
       <button v-if="active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || active.warnings.length > 0" @click="park(active)">Dock {{ active.label }} (empty the gantry)</button>
-      <button :disabled="!!state.busy" title="Read every tool sensor and select the tool that is on the gantry (no motion)" @click="detectTool()">Detect tool</button>
-      <button :disabled="!!state.busy || isPrinting" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
+      <button :disabled="!!state.busy || fromConfig" title="Read every tool sensor and select the tool that is on the gantry (no motion)" @click="detectTool()">Detect tool</button>
+      <button :disabled="!!state.busy || isPrinting || fromConfig" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
       <button class="primary" :disabled="isPrinting" @click="adding = true">+ Add tool</button>
     </div>
     <div v-if="error" class="callout err">{{ error }}</div>
+    <div v-if="fromConfig" class="callout info">
+      Klipper isn't running, so these tools are read from the config files. Live values (temperatures, sensors, board status) come back once it
+      runs. You can still edit a tool and save it; restart Klipper afterwards.
+    </div>
     <ProbeLive />
     <div class="cards">
       <ToolCard v-for="t in tools" :key="t.name" :tool="t" @select="select(t)" @park="park(t)" @edit="edit(t)" @dock="dock(t)" />

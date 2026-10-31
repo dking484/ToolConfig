@@ -2,7 +2,7 @@
 // Live per-tool sensor states (pushed by Klipper on every change, no polling),
 // shown as where each tool is rather than raw probe states.
 import { computed, ref, watch } from 'vue'
-import { probing, status, tools } from '../store'
+import { probing, state, status, tools } from '../store'
 
 const live = computed<Record<string, boolean> | null>(() => status.value.toolchanger_ui?.probes ?? null)
 const flash = ref<Record<string, number>>({})
@@ -41,7 +41,8 @@ const onGantry = computed(() => rows.value.filter((r) => r.where === 'gantry'))
 </script>
 
 <template>
-  <div class="probelive panel">
+  <!-- hidden while Klipper is down: the last status would be stale -->
+  <div v-if="state.klippy === 'ready'" class="probelive panel">
     <div class="row head">
       <strong>Where each tool is (live)</strong>
       <span

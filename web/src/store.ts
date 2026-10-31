@@ -1,6 +1,7 @@
-import { computed, reactive, shallowRef } from 'vue'
+import { computed, reactive, shallowRef, watch } from 'vue'
 import { Moonraker, type Status } from './lib/moonraker'
-import { allMcus, buildTools } from './lib/tools'
+import { allMcus, buildTools, type ToolInfo } from './lib/tools'
+import { toolsFromConfig } from './lib/configTools'
 import { ConfigIndex } from './lib/configFiles'
 import { resolveTheme, type ResolvedTheme } from './lib/mainsailTheme'
 
@@ -37,7 +38,26 @@ export function realign(tool: number) {
 // Status is large and updates often: keep it shallow and swap the reference.
 export const status = shallowRef<Status>({})
 
-export const tools = computed(() => buildTools(status.value))
+// "mcu 'EBBT4': Unable to connect": the board Klipper can't reach, '' if none
+export const lostBoard = computed(() => state.klippyMessage.match(/mcu '([^']+)': Unable to connect/)?.[1] ?? '')
+// While Klipper is down there is no status to build tools from: read them
+// from the config files instead, so they can still be seen and edited.
+export const configTools = shallowRef<ToolInfo[]>([])
+export const tools = computed(() => (state.klippy === 'ready' ? buildTools(status.value) : configTools.value))
+async function loadConfigTools() {
+  try {
+    await configIndex.load()
+    configTools.value = toolsFromConfig(configIndex.files, configIndex.autosave, lostBoard.value)
+  } catch {
+    configTools.value = []
+  }
+}
+watch(
+  () => [state.connection, state.klippy, state.klippyMessage] as const,
+  ([c, k]) => {
+    if (c === 'open' && k !== 'ready' && k !== 'startup') loadConfigTools()
+  },
+)
 export const mcus = computed(() => allMcus(status.value))
 export const tc = computed(() => status.value.toolchanger ?? {})
 export const safety = computed(() => status.value['gcode_macro _TC_SAFETY'] ?? null)
