@@ -883,13 +883,19 @@ class ToolchangerUI:
         probes = self._registered_probes()
         if n not in probes or probe_obj is None:
             raise gcmd.error("Put a tool with a probe on the gantry first")
+        z_off = self._probe_z_offset(probes[n])
+        if n != self._ref_tool(probes) and z_off == 0.:
+            # A Tap probe triggers after some travel, so 0 means unmeasured
+            raise gcmd.error(
+                "T%d's probe z_offset was never measured (it is 0), so it"
+                " can't set Z: measure it on the Z offsets tab, or put a"
+                " measured tool on the gantry" % (n,))
         bed_z, in_mesh = self._bed_mesh()
         points = self._rehome_points(gcmd, th, in_mesh)
         if len(points) < 2:
             raise gcmd.error("No two probe spots clear of the print were found;"
                              " give them with X= Y= X2= Y2=")
         clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
-        z_off = self._probe_z_offset(probes[n])
         heater = toolhead.get_extruder().get_name()
         temp = self._heater_target(heater, now)
         gcode_move = self.printer.lookup_object('gcode_move')
