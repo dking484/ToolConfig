@@ -191,8 +191,9 @@ def cfg_locate(main, section, key):
                 if name.lower().startswith('include '):
                     pattern = os.path.join(os.path.dirname(path),
                                            name[8:].strip())
+                    # normpath: readonly-configs/../tools/T1.cfg is T1.cfg
                     for p in sorted(glob.glob(pattern)):
-                        visit(p)
+                        visit(os.path.normpath(p))
                     cur = None
                 else:
                     cur = _cfg_norm(name)
@@ -204,7 +205,7 @@ def cfg_locate(main, section, key):
                 if m and m.group(1).lower() == k:
                     found['key'] = path
 
-    visit(main)
+    visit(os.path.normpath(main))
     return found['key'] or found['section']
 
 
@@ -742,8 +743,12 @@ class ToolchangerUI:
                                    'z_offset') for p in probes.values())):
             # No toolchanger probe setup this understands: Klipper's own
             return orig(gcmd)
+        # Reported, not raised: on klipper-toolchanger any command error
+        # un-initializes the toolchanger, which would break a running print.
         if tc.status == 'changing':
-            raise gcmd.error("Not during a tool change")
+            self.gcode.respond_raw("!! Z offset not saved: a tool change is"
+                                   " running")
+            return
         now = self.reactor.monotonic()
         gcode_move = self.printer.lookup_object('gcode_move')
         delta = gcode_move.get_status(now)['homing_origin'][2] \
@@ -766,7 +771,8 @@ class ToolchangerUI:
         try:
             files = self._save_options(edits)
         except Exception as e:
-            raise gcmd.error("Z offset not saved: %s" % (e,))
+            self.gcode.respond_raw("!! Z offset not saved: %s" % (e,))
+            return
         for n, c in changes.items():
             if 'probe_z' in c:
                 probes[n].probe_offsets.z_offset = c['probe_z']

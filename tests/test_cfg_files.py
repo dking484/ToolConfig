@@ -81,6 +81,15 @@ class Files(unittest.TestCase):
                          os.path.join(self.dir, 'tools', 'T1.cfg'))
         self.assertIsNone(tu.cfg_locate(main, 'tool T7', 'gcode_z_offset'))
 
+    def test_include_through_parent_dir_is_normalized(self):
+        # easy's readonly-configs/toolchanger-include.cfg includes ../tools/*.cfg
+        os.makedirs(os.path.join(self.dir, 'readonly-configs'))
+        self.write('readonly-configs/include.cfg', '[include ../tools/*.cfg]\n')
+        self.write('printer.cfg', '[include readonly-configs/include.cfg]\n')
+        main = os.path.join(self.dir, 'printer.cfg')
+        self.assertEqual(tu.cfg_locate(main, 'tool T1', 'gcode_z_offset'),
+                         os.path.join(self.dir, 'tools', 'T1.cfg'))
+
     def test_later_definition_wins(self):
         self.write('printer.cfg', '[include tools/*.cfg]\n[tool T1]\ngcode_z_offset: 3\n')
         main = os.path.join(self.dir, 'printer.cfg')
