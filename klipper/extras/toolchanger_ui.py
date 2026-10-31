@@ -11,6 +11,9 @@
 #    150C before every Tap probe and never turns it off, so outside a print a
 #    tool stays hot until idle_timeout. Heat it only turned on is turned back
 #    off probe_heat_off_delay seconds after probing ends.
+#  - TC_MEASURE_Z: probe one bed spot with every tool's own Tap probe and
+#    propose each tool's probe z_offset and gcode_z_offset from it;
+#    TC_SET_Z_OFFSET applies them live (the web page also saves them).
 #  - printer.toolchanger_ui status: the toolchanger's error message, which
 #    klipper-toolchanger does not publish itself, and one view of the tool
 #    sensors for the macros and the web page.
@@ -26,10 +29,12 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import sys
+import sys, time
 
 # Seconds a tool's sensor must be steady before a hand-placed tool is selected
 AUTO_SELECT_SETTLE = 1.5
+# Two probes of one tool further apart than this are reported as unsteady
+Z_MEASURE_SPREAD = 0.02
 
 
 def _probe_tool_number(probe):
@@ -37,6 +42,23 @@ def _probe_tool_number(probe):
     if n is None:
         n = getattr(probe, 'tool', None)
     return n
+
+
+def z_proposals(triggers, ref, ref_gcode_z):
+    """Proposed offsets from the trigger heights one bed spot gave each tool.
+
+    triggers: tool number -> toolhead Z where its probe triggered, all
+    measured right after homing Z with the reference tool. Homing with a tool
+    sets Z to its probe's z_offset at the trigger, so a tool whose z_offset
+    is its measured trigger height homes to the same Z as the reference.
+    The nozzles' length difference is the difference of trigger heights,
+    assuming the Tap sensors press in about the same amount before they
+    trigger; the first layer shows what is left. The reference keeps its
+    offsets: it defines Z.
+    Returns tool number -> (probe z_offset, gcode_z_offset)."""
+    base = triggers[ref]
+    return {n: (round(z, 3), round(ref_gcode_z + z - base, 3))
+            for n, z in triggers.items() if n != ref}
 
 
 class ToolchangerUI:
@@ -73,6 +95,13 @@ class ToolchangerUI:
             'TC_RAISE', self.cmd_TC_RAISE, desc=self.cmd_TC_RAISE_help)
         self.gcode.register_command(
             'TC_DETECT', self.cmd_TC_DETECT, desc=self.cmd_TC_DETECT_help)
+        self.gcode.register_command(
+            'TC_MEASURE_Z', self.cmd_TC_MEASURE_Z,
+            desc=self.cmd_TC_MEASURE_Z_help)
+        self.gcode.register_command(
+            'TC_SET_Z_OFFSET', self.cmd_TC_SET_Z_OFFSET,
+            desc=self.cmd_TC_SET_Z_OFFSET_help)
+        self.z_measure = None
         # Live per-tool probe pin states. tool_probe registers every probe pin
         # with the buttons module (for crash detection) and reports each
         # change to tool_probe_endstop.note_probe_triggered; record them on
@@ -195,15 +224,18 @@ class ToolchangerUI:
         if self.probe_heat_wait:
             self.probe_heat_wait = False
             return eventtime + self.probe_heat_off_delay
+        self._probe_heat_off(eventtime, self._run_from_timer)
+        return self.reactor.NEVER
+
+    def _probe_heat_off(self, eventtime, run=None):
         heated, self.probe_heated = self.probe_heated, {}
         for heater, temp in heated.items():
             # Leave a temperature someone set since then alone
             if self._heater_target(heater, eventtime) == temp:
-                self._run_from_timer(
+                (run or self.gcode.run_script_from_command)(
                     "SET_HEATER_TEMPERATURE HEATER=%s TARGET=0\n"
                     "RESPOND MSG=\"%s turned off (only heated for probing)\""
                     % (heater, heater))
-        return self.reactor.NEVER
 
     def _homing_move_begin(self, *args):
         self.homing_move_active = True
@@ -356,6 +388,160 @@ class ToolchangerUI:
                                   % (detected,))
                 self.gcode.run_script_from_command('INITIALIZE_TOOLCHANGER')
 
+    # ---- Z offsets ----------------------------------------------------------
+    def _tool(self, n):
+        for t in self._tools():
+            if t.tool_number == n:
+                return t
+        return None
+
+    def _probe_z_offset(self, probe):
+        po = getattr(probe, 'probe_offsets', None)
+        if po is not None and hasattr(po, 'z_offset'):
+            return po.z_offset
+        return probe.get_offsets()[2]
+
+    def _select(self, n):
+        # The T<n> macro, if there is one, is what everything else uses
+        cmd = 'T%d' % n
+        if cmd not in getattr(self.gcode, 'ready_gcode_handlers', {}):
+            cmd = 'SELECT_TOOL T=%d' % n
+        self.gcode.run_script_from_command(cmd)
+
+    def _active_number(self):
+        tc = self.toolchanger
+        return tc.active_tool.tool_number if tc and tc.active_tool else -1
+
+    cmd_TC_MEASURE_Z_help = (
+        "Probe one bed spot with each tool and propose Z offsets"
+        " [TOOLS=0,1,..] [REF=0] [X=] [Y=] [CLEARANCE=10]")
+    def cmd_TC_MEASURE_Z(self, gcmd):
+        tc = self.toolchanger
+        probes = self._registered_probes()
+        probe_obj = self.printer.lookup_object('probe', None)
+        if not probes or probe_obj is None or tc is None:
+            raise gcmd.error("TC_MEASURE_Z needs a probe on every tool")
+        now = self.reactor.monotonic()
+        toolhead = self.printer.lookup_object('toolhead')
+        th = toolhead.get_status(now)
+        if th['homed_axes'] != 'xyz':
+            raise gcmd.error("Home the printer first")
+        if self._is_printing(now):
+            raise gcmd.error("Not during a print")
+        if tc.status != 'ready':
+            raise gcmd.error("The toolchanger is %s, not ready" % (tc.status,))
+        tools = sorted(probes)
+        if gcmd.get('TOOLS', None):
+            try:
+                tools = sorted(set(int(t) for t in
+                                   gcmd.get('TOOLS').replace('T', '').split(',')))
+            except ValueError:
+                raise gcmd.error("TOOLS must look like 0,1,3")
+        ref = gcmd.get_int('REF', 0 if 0 in probes else tools[0])
+        tools = [ref] + [n for n in tools if n != ref]
+        for n in tools:
+            if n not in probes or self._tool(n) is None:
+                raise gcmd.error("T%d has no tool probe" % (n,))
+        x = gcmd.get_float('X', (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.)
+        y = gcmd.get_float('Y', (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.)
+        clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
+        start = self._active_number()
+        triggers, spreads = {}, {}
+        before = {n: (self._probe_z_offset(probes[n]),
+                      self._tool(n).gcode_z_offset or 0.) for n in tools}
+
+        def publish(complete):
+            props = z_proposals(triggers, ref, before[ref][1]) \
+                if ref in triggers else {}
+            self.z_measure = {
+                'time': time.time(), 'x': x, 'y': y, 'reference': ref,
+                'complete': complete,
+                'tools': {str(n): {
+                    'trigger': round(triggers[n], 4),
+                    'spread': round(spreads[n], 4),
+                    'probe_z_offset': before[n][0],
+                    'gcode_z_offset': before[n][1],
+                    'new_probe_z_offset': props.get(n, (None, None))[0],
+                    'new_gcode_z_offset': props.get(n, (None, None))[1],
+                } for n in triggers}}
+
+        run = self.gcode.run_script_from_command
+        for n in tools:
+            if self._active_number() != n:
+                self._select(n)
+            if n == ref:
+                # Z zero comes from the reference tool's probe
+                run("G28 Z")
+            run("G90\nG0 X%.3f Y%.3f F12000\nG0 Z%.3f F3000"
+                % (x, y, clearance))
+            zs = []
+            for _ in range(2):
+                run("PROBE")
+                # Where the probe triggered (toolhead Z), before its z_offset
+                # is taken off
+                zs.append(probe_obj.get_status(
+                    self.reactor.monotonic())['last_z_result'])
+                run("G0 Z%.3f F1200" % (clearance,))
+            triggers[n] = sum(zs) / len(zs)
+            spreads[n] = max(zs) - min(zs)
+            publish(n == tools[-1])
+            # Don't leave it at probe temperature in its dock
+            self._probe_heat_off(self.reactor.monotonic())
+        if start >= 0 and self._active_number() != start:
+            self._select(start)
+        self._report_z(gcmd)
+
+    def _report_z(self, gcmd):
+        m = self.z_measure
+        lines = ["Z measured at X%.1f Y%.1f (trigger height = toolhead Z where"
+                 " the probe triggered):" % (m['x'], m['y'])]
+        ref = m['reference']
+        for n, r in sorted(m['tools'].items(), key=lambda i: int(i[0])):
+            line = "T%s: trigger %.3f" % (n, r['trigger'])
+            if r['spread'] > Z_MEASURE_SPREAD:
+                line += " (UNSTEADY: %.3f between probes)" % (r['spread'],)
+            if int(n) == ref:
+                line += ", reference (its z_offset is %.3f)" % (
+                    r['probe_z_offset'],)
+            else:
+                line += (", probe z_offset %.3f -> %.3f, gcode_z_offset"
+                         " %.3f -> %.3f" % (
+                             r['probe_z_offset'], r['new_probe_z_offset'],
+                             r['gcode_z_offset'], r['new_gcode_z_offset']))
+            lines.append(line)
+        lines.append("Apply and save them on the ToolConfig Z offsets tab"
+                     " (TC_SET_Z_OFFSET only applies until a restart).")
+        gcmd.respond_info("\n".join(lines))
+
+    cmd_TC_SET_Z_OFFSET_help = (
+        "Apply a tool's Z offsets now, until restart:"
+        " T=<n> [PROBE_Z=] [GCODE_Z=]")
+    def cmd_TC_SET_Z_OFFSET(self, gcmd):
+        n = gcmd.get_int('T')
+        tool = self._tool(n)
+        if tool is None:
+            raise gcmd.error("No tool T%d" % (n,))
+        tc = self.toolchanger
+        if tc.status == 'changing' and tc.active_tool is tool:
+            raise gcmd.error("Not while T%d is being changed" % (n,))
+        probe_z = gcmd.get_float('PROBE_Z', None)
+        gcode_z = gcmd.get_float('GCODE_Z', None)
+        if probe_z is not None:
+            probe = self._registered_probes().get(n)
+            po = getattr(probe, 'probe_offsets', None)
+            if po is None or not hasattr(po, 'z_offset'):
+                raise gcmd.error("Can't change T%d's probe z_offset live" % (n,))
+            po.z_offset = probe_z
+        if gcode_z is not None:
+            tool.set_parameter('gcode_z_offset', gcode_z)
+            if tc.active_tool is tool:
+                # Z in G-code coordinates now means something else; no motion
+                self.printer.lookup_object('gcode_move').reset_last_position()
+        gcmd.respond_info("T%d: %s" % (n, ', '.join(
+            s for s in ("probe z_offset %.3f" % probe_z if probe_z is not None
+                        else '', "gcode_z_offset %.3f" % gcode_z
+                        if gcode_z is not None else '') if s) or 'nothing set'))
+
     def _last_query(self):
         tpe = self.tool_probe_endstop
         return dict(getattr(tpe, 'last_query', None) or {}) if tpe else {}
@@ -402,6 +588,12 @@ class ToolchangerUI:
             # a probing/homing move is running (or just ended): the active
             # tool's Tap sensor reading "docked" is the nozzle on the bed
             'probing': self._probing(eventtime),
+            # live probe z_offset per tool (TC_SET_Z_OFFSET changes it)
+            'probe_z_offsets': {
+                str(n): self._probe_z_offset(p)
+                for n, p in self._registered_probes().items()},
+            # last TC_MEASURE_Z, or None
+            'z_measure': self.z_measure,
         }
 
 def load_config(config):

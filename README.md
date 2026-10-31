@@ -77,6 +77,8 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 | `TC_TEST_MODE ENABLE=1 [SPEED=0.35]` | Slow dock moves; failures report-only |
 | `TC_TEST_DOCK T=n CYCLES=k` | Dock/pick up tool n k times, verifying each pickup |
 | `TC_CLEAR_ACTIVE_TOOL` | Forget the active tool without moving (Python helper) |
+| `TC_MEASURE_Z [TOOLS=0,1] [REF=0] [X= Y=]` | Probe one bed spot with each tool's own probe and propose its Z offsets (see below) |
+| `TC_SET_Z_OFFSET T=n [PROBE_Z=] [GCODE_Z=]` | Apply a tool's probe `z_offset` / `gcode_z_offset` now, until restart |
 
 **Web page (`web/`)**
 - **Tools**: every tool with dock position, offsets, nozzle, probe offset,
@@ -103,6 +105,20 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 - **Dock test & align**: pre-flight checks, test mode, repeated dock cycles
   with pass/fail counters, guided alignment with a fine jog pad, save the new
   dock position without restarting.
+- **Z offsets** (needs a probe on every tool, e.g. Tap/OptoTap): homes Z with
+  the reference tool (T0), then picks up each tool you tick and probes the
+  same bed spot twice. For each tool it proposes
+  - **probe `z_offset`** = the height where that tool's probe triggered, so
+    homing Z with any tool gives the same Z as homing with T0;
+  - **`gcode_z_offset`** = its trigger height minus T0's, i.e. how much longer
+    or shorter the nozzle is. This assumes the probes press in about the same
+    amount before they trigger; fine-tune with the first layer.
+
+  **Apply and save** writes `[tool_probe Tn] z_offset` and `[tool Tn]
+  gcode_z_offset` to the tool's file (backed up) and applies them live, with
+  no restart. T0 keeps its own values: it defines Z. A value for the same key
+  in printer.cfg's SAVE_CONFIG block would win over the file, so the page
+  refuses until it is removed there.
 - **Slicer check**: scans a G-code file for commands this Klipper does not
   have and checks the OrcaSlicer profile embedded in it (single-nozzle
   multi-material mode, nozzle sizes per tool, extruder offsets, PRINT_START

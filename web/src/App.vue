@@ -19,10 +19,12 @@ import DockView from './components/DockView.vue'
 import SlicerView from './components/SlicerView.vue'
 import HardwareView from './components/HardwareView.vue'
 import LogPanel from './components/LogPanel.vue'
+import ZOffsetsView from './components/ZOffsetsView.vue'
 
 const tabs = [
   { id: 'tools', label: 'Tools' },
   { id: 'dock', label: 'Dock test & align' },
+  { id: 'zoffset', label: 'Z offsets' },
   { id: 'slicer', label: 'Slicer check' },
   { id: 'hardware', label: 'Boards & IDs' },
   { id: 'console', label: 'Console' },
@@ -111,6 +113,7 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
 
     <ToolsView v-if="tab === 'tools'" @go="(t: TabId) => (tab = t)" />
     <DockView v-else-if="tab === 'dock'" />
+    <ZOffsetsView v-else-if="tab === 'zoffset'" />
     <SlicerView v-else-if="tab === 'slicer'" />
     <HardwareView v-else-if="tab === 'hardware'" />
     <LogPanel v-else-if="tab === 'console'" :tall="true" />
