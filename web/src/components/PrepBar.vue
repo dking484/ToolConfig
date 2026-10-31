@@ -3,6 +3,7 @@
 // homed and the gantry is levelled.
 import { computed } from 'vue'
 import { detectTool, homed, isPrinting, runWithTool, state, status, tools } from '../store'
+import ActivityLine from './ActivityLine.vue'
 
 const qgl = computed(() => !!status.value.quad_gantry_level?.applied)
 const hasQgl = computed(() => 'quad_gantry_level' in status.value)
@@ -31,6 +32,7 @@ const disabled = computed(() => !!state.busy || isPrinting.value)
       <button v-if="hasQgl" class="big" :class="homed === 'xyz' && !qgl ? 'primary' : ''" :disabled="disabled || homed !== 'xyz'" :title="homed !== 'xyz' ? 'Home first' : ''" @click="runWithTool('QUAD_GANTRY_LEVEL\nG28 Z', 'Quad gantry level')">Quad gantry level</button>
       <button v-if="hasQgl && homed !== 'xyz'" class="big blue" :disabled="disabled" @click="runWithTool('G28\nQUAD_GANTRY_LEVEL\nG28 Z', 'Home + level')">Home + level (all 3 steps)</button>
     </div>
+    <ActivityLine class="full" />
   </div>
 </template>
 
@@ -39,5 +41,6 @@ const disabled = computed(() => !!state.busy || isPrinting.value)
 .text { flex: 1 1 320px; display: flex; flex-direction: column; gap: 3px; }
 .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .big { padding: 9px 16px; font-weight: 600; }
+.full { flex: 1 1 100%; }
 .err-text { color: var(--err); }
 </style>

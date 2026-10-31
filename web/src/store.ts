@@ -19,6 +19,7 @@ export const state = reactive({
   klippyMessage: '',
   log: [] as LogLine[],
   busy: '' as string, // label of the command currently running from this UI
+  busySince: 0, // when it started (ms)
   pendingRestart: [] as string[], // config changes that need FIRMWARE_RESTART
   objects: [] as string[],
   dockTool: 0, // tool preselected on the Dock tab
@@ -139,6 +140,7 @@ async function init() {
 export async function run(script: string, label = script) {
   log(script, 'cmd')
   state.busy = label
+  state.busySince = Date.now()
   try {
     await mr.gcode(script)
     return true
