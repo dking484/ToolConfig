@@ -13,7 +13,12 @@
 #    off probe_heat_off_delay seconds after probing ends.
 #  - TC_MEASURE_Z: probe one bed spot with every tool's own Tap probe and
 #    propose each tool's probe z_offset and gcode_z_offset from it;
-#    TC_SET_Z_OFFSET applies them live (the web page also saves them).
+#    TC_SET_Z_OFFSET applies them live (the web page also saves them);
+#    TC_CHECK_Z homes with one tool and probes with the reference to show
+#    whether their Z zeros match.
+#  - Z_OFFSET_APPLY_PROBE (Mainsail's Z offset "Save") saves the adjustment
+#    to the tool that is on, in its config file, instead of the
+#    [tool_probe_endstop] z_offset nothing reads (save_babysteps_to_tool).
 #  - printer.toolchanger_ui status: the toolchanger's error message, which
 #    klipper-toolchanger does not publish itself, and one view of the tool
 #    sensors for the macros and the web page.
@@ -29,12 +34,14 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
-import sys, time
+import glob, os, re, sys, time
 
 # Seconds a tool's sensor must be steady before a hand-placed tool is selected
 AUTO_SELECT_SETTLE = 1.5
 # Two probes of one tool further apart than this are reported as unsteady
 Z_MEASURE_SPREAD = 0.02
+# TC_CHECK_Z: Z zeros of two tools further apart than this need re-measuring
+Z_CHECK_LIMIT = 0.02
 
 
 def _probe_tool_number(probe):
@@ -59,6 +66,146 @@ def z_proposals(triggers, ref, ref_gcode_z):
     base = triggers[ref]
     return {n: (round(z, 3), round(ref_gcode_z + z - base, 3))
             for n, z in triggers.items() if n != ref}
+
+
+def babystep_changes(delta, active, ref, probe_z, active_gcode_z):
+    """Where a Z offset adjustment of `delta` (positive = nozzle higher),
+    made with tool `active` on, is saved.
+
+    The reference tool's adjustment moves Z itself: every point is `delta`
+    lower in the corrected Z, so is every probe's trigger height. Any other
+    tool's adjustment is its own: it goes into its gcode_z_offset.
+    probe_z: tool number -> probe z_offset now.
+    Returns tool number -> {'probe_z': new} or {'gcode_z': new}."""
+    if active == ref:
+        return {n: {'probe_z': round(z - delta, 3)} for n, z in probe_z.items()}
+    return {active: {'gcode_z': round(active_gcode_z + delta, 3)}}
+
+
+# ---- Klipper config files (same rules as web/src/lib/cfgEdit.ts) ----------
+SAVE_CONFIG_HEADER = '#*# <---------------------- SAVE_CONFIG'
+_OPTION = re.compile(r'([A-Za-z0-9_.\-]+)(\s*[:=]\s?)(.*)$')
+
+
+def _read(path):
+    with open(path, newline='') as f:
+        return f.read()
+
+
+def _cfg_norm(name):
+    return ' '.join(name.split()).lower()
+
+
+def cfg_sections(lines):
+    """[(name, header line, {key: (first line, last line)})] before the
+    SAVE_CONFIG block. Indented lines continue the previous option."""
+    out = []
+    cur = last = None
+    for i, raw in enumerate(lines):
+        if raw.startswith(SAVE_CONFIG_HEADER):
+            break
+        if raw.startswith('['):
+            m = re.match(r'\[([^\]]+)\]', raw)
+            if m:
+                cur = (m.group(1).strip(), i, {})
+                out.append(cur)
+                last = None
+                continue
+        if cur is None or not raw.strip() or raw.lstrip()[0] in '#;':
+            continue
+        if raw[0] in ' \t':
+            if last is not None:
+                cur[2][last] = (cur[2][last][0], i)
+            continue
+        m = _OPTION.match(raw)
+        if m:
+            last = m.group(1).lower()
+            cur[2][last] = (i, i)
+    return out
+
+
+def cfg_set_option(text, section, key, value):
+    """Set [section] key in this file's text: in its last definition (the
+    one Klipper uses), keeping an inline comment, or added at the end of the
+    section's last occurrence."""
+    eol = '\r\n' if '\r\n' in text else '\n'
+    lines = re.split(r'\r?\n', text)
+    want, k = _cfg_norm(section), key.lower()
+    secs = [s for s in cfg_sections(lines) if _cfg_norm(s[0]) == want]
+    if not secs:
+        raise ValueError("Section [%s] not found" % (section,))
+    with_key = [s for s in secs if k in s[2]]
+    if with_key:
+        first, end = with_key[-1][2][k]
+        m = _OPTION.match(lines[first])
+        c = re.search(r'\s[#;]', m.group(3))
+        comment = ' ' + m.group(3)[c.start():].strip() if c else ''
+        lines[first:end + 1] = [m.group(1) + m.group(2) + value + comment]
+    else:
+        s = secs[-1]
+        at = max([s[1]] + [e for _, e in s[2].values()]) + 1
+        lines.insert(at, '%s: %s' % (key, value))
+    return eol.join(lines)
+
+
+def cfg_autosave(text):
+    """section -> {key: value} from printer.cfg's SAVE_CONFIG block."""
+    out, cur, inside = {}, None, False
+    for raw in re.split(r'\r?\n', text):
+        if raw.startswith(SAVE_CONFIG_HEADER):
+            inside = True
+            continue
+        if not inside or not raw.startswith('#*#'):
+            continue
+        line = raw[3:].strip()
+        m = re.match(r'\[([^\]]+)\]', line)
+        if m:
+            cur = out.setdefault(_cfg_norm(m.group(1)), {})
+        elif cur is not None:
+            m = re.match(r'([A-Za-z0-9_.\-]+)\s*[:=]\s*(.*)$', line)
+            if m:
+                cur[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def cfg_locate(main, section, key):
+    """Path of the file Klipper takes [section] key from (last definition,
+    includes processed in place), else the file with the section's last
+    occurrence, else None."""
+    want, k = _cfg_norm(section), key.lower()
+    found = {'key': None, 'section': None}
+    seen = set()
+
+    def visit(path):
+        real = os.path.realpath(path)
+        if real in seen:
+            return
+        seen.add(real)
+        cur = None
+        for raw in re.split(r'\r?\n', _read(path)):
+            if raw.startswith(SAVE_CONFIG_HEADER):
+                break
+            m = re.match(r'\[([^\]]+)\]', raw)
+            if m:
+                name = m.group(1).strip()
+                if name.lower().startswith('include '):
+                    pattern = os.path.join(os.path.dirname(path),
+                                           name[8:].strip())
+                    for p in sorted(glob.glob(pattern)):
+                        visit(p)
+                    cur = None
+                else:
+                    cur = _cfg_norm(name)
+                    if cur == want:
+                        found['section'] = path
+                continue
+            if cur == want:
+                m = _OPTION.match(raw)
+                if m and m.group(1).lower() == k:
+                    found['key'] = path
+
+    visit(main)
+    return found['key'] or found['section']
 
 
 class ToolchangerUI:
@@ -101,7 +248,16 @@ class ToolchangerUI:
         self.gcode.register_command(
             'TC_SET_Z_OFFSET', self.cmd_TC_SET_Z_OFFSET,
             desc=self.cmd_TC_SET_Z_OFFSET_help)
+        self.gcode.register_command(
+            'TC_CHECK_Z', self.cmd_TC_CHECK_Z, desc=self.cmd_TC_CHECK_Z_help)
         self.z_measure = None
+        self.z_check = None
+        # Z offset adjustment already saved with the reference tool on (it
+        # only takes effect at the next Z home)
+        self.babystep_saved = 0.
+        self.save_babysteps = config.getboolean('save_babysteps_to_tool', True)
+        self.printer.register_event_handler('homing:home_rails_end',
+                                            self._home_rails_end)
         # Live per-tool probe pin states. tool_probe registers every probe pin
         # with the buttons module (for crash detection) and reports each
         # change to tool_probe_endstop.note_probe_triggered; record them on
@@ -152,6 +308,8 @@ class ToolchangerUI:
             self._wrap_command(name, self._guard_stray_tool)
         if self.tool_probe_endstop is not None:
             self._wrap_command('DETECT_ACTIVE_TOOL_PROBE', self._detect_probes)
+        if self.save_babysteps:
+            self._wrap_command('Z_OFFSET_APPLY_PROBE', self._apply_babystep)
         # A tool already on the gantry at startup counts as just placed
         self._sensor_changed()
 
@@ -412,24 +570,49 @@ class ToolchangerUI:
         tc = self.toolchanger
         return tc.active_tool.tool_number if tc and tc.active_tool else -1
 
-    cmd_TC_MEASURE_Z_help = (
-        "Probe one bed spot with each tool and propose Z offsets"
-        " [TOOLS=0,1,..] [REF=0] [X=] [Y=] [CLEARANCE=10]")
-    def cmd_TC_MEASURE_Z(self, gcmd):
+    def _ref_tool(self, probes):
+        return 0 if 0 in probes else min(probes)
+
+    def _z_preflight(self, gcmd):
+        """Checks shared by the Z commands; returns (probes, probe, toolhead
+        status, X, Y, clearance)."""
         tc = self.toolchanger
         probes = self._registered_probes()
         probe_obj = self.printer.lookup_object('probe', None)
         if not probes or probe_obj is None or tc is None:
-            raise gcmd.error("TC_MEASURE_Z needs a probe on every tool")
+            raise gcmd.error("This needs a probe on every tool")
         now = self.reactor.monotonic()
-        toolhead = self.printer.lookup_object('toolhead')
-        th = toolhead.get_status(now)
+        th = self.printer.lookup_object('toolhead').get_status(now)
         if th['homed_axes'] != 'xyz':
             raise gcmd.error("Home the printer first")
         if self._is_printing(now):
             raise gcmd.error("Not during a print")
         if tc.status != 'ready':
             raise gcmd.error("The toolchanger is %s, not ready" % (tc.status,))
+        x = gcmd.get_float('X', (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.)
+        y = gcmd.get_float('Y', (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.)
+        clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
+        return probes, probe_obj, x, y, clearance
+
+    def _probe_here(self, probe_obj, x, y, clearance, times):
+        """Probe X,Y `times` times with the mounted tool; returns the toolhead
+        Z of each trigger (Klipper's last_z_result: before the probe's
+        z_offset is taken off)."""
+        run = self.gcode.run_script_from_command
+        run("G90\nG0 X%.3f Y%.3f F12000\nG0 Z%.3f F3000" % (x, y, clearance))
+        zs = []
+        for _ in range(times):
+            run("PROBE")
+            zs.append(probe_obj.get_status(
+                self.reactor.monotonic())['last_z_result'])
+            run("G0 Z%.3f F1200" % (clearance,))
+        return zs
+
+    cmd_TC_MEASURE_Z_help = (
+        "Probe one bed spot with each tool and propose Z offsets"
+        " [TOOLS=0,1,..] [REF=0] [X=] [Y=] [CLEARANCE=10]")
+    def cmd_TC_MEASURE_Z(self, gcmd):
+        probes, probe_obj, x, y, clearance = self._z_preflight(gcmd)
         tools = sorted(probes)
         if gcmd.get('TOOLS', None):
             try:
@@ -437,14 +620,11 @@ class ToolchangerUI:
                                    gcmd.get('TOOLS').replace('T', '').split(',')))
             except ValueError:
                 raise gcmd.error("TOOLS must look like 0,1,3")
-        ref = gcmd.get_int('REF', 0 if 0 in probes else tools[0])
+        ref = gcmd.get_int('REF', self._ref_tool(probes))
         tools = [ref] + [n for n in tools if n != ref]
         for n in tools:
             if n not in probes or self._tool(n) is None:
                 raise gcmd.error("T%d has no tool probe" % (n,))
-        x = gcmd.get_float('X', (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.)
-        y = gcmd.get_float('Y', (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.)
-        clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
         start = self._active_number()
         triggers, spreads = {}, {}
         before = {n: (self._probe_z_offset(probes[n]),
@@ -472,16 +652,7 @@ class ToolchangerUI:
             if n == ref:
                 # Z zero comes from the reference tool's probe
                 run("G28 Z")
-            run("G90\nG0 X%.3f Y%.3f F12000\nG0 Z%.3f F3000"
-                % (x, y, clearance))
-            zs = []
-            for _ in range(2):
-                run("PROBE")
-                # Where the probe triggered (toolhead Z), before its z_offset
-                # is taken off
-                zs.append(probe_obj.get_status(
-                    self.reactor.monotonic())['last_z_result'])
-                run("G0 Z%.3f F1200" % (clearance,))
+            zs = self._probe_here(probe_obj, x, y, clearance, 2)
             triggers[n] = sum(zs) / len(zs)
             spreads[n] = max(zs) - min(zs)
             publish(n == tools[-1])
@@ -512,6 +683,161 @@ class ToolchangerUI:
         lines.append("Apply and save them on the ToolConfig Z offsets tab"
                      " (TC_SET_Z_OFFSET only applies until a restart).")
         gcmd.respond_info("\n".join(lines))
+
+    cmd_TC_CHECK_Z_help = (
+        "Home Z with tool T, then probe with the reference tool: shows how far"
+        " apart their Z zeros are. T=<n> [REF=0] [X=] [Y=]")
+    def cmd_TC_CHECK_Z(self, gcmd):
+        probes, probe_obj, x, y, clearance = self._z_preflight(gcmd)
+        n = gcmd.get_int('T')
+        ref = gcmd.get_int('REF', self._ref_tool(probes))
+        for t in (n, ref):
+            if t not in probes or self._tool(t) is None:
+                raise gcmd.error("T%d has no tool probe" % (t,))
+        if n == ref:
+            raise gcmd.error("T%d is the reference; pick another tool" % (n,))
+        start = self._active_number()
+        run = self.gcode.run_script_from_command
+        if start != n:
+            self._select(n)
+        run("G28 Z")
+        self._probe_heat_off(self.reactor.monotonic())
+        self._select(ref)
+        # With matching offsets, homing with T<n> set the same Z the
+        # reference sets, so the reference triggers at its own z_offset.
+        z = self._probe_here(probe_obj, x, y, clearance, 1)[0]
+        dev = z - self._probe_z_offset(probes[ref])
+        # Leave Z as the reference tool sets it
+        run("G28 Z")
+        self._probe_heat_off(self.reactor.monotonic())
+        if start >= 0 and self._active_number() != start:
+            self._select(start)
+        self.z_check = {'tool': n, 'reference': ref, 'deviation': round(dev, 4),
+                        'x': x, 'y': y, 'time': time.time()}
+        good = abs(dev) <= Z_CHECK_LIMIT
+        gcmd.respond_info(
+            "Z check: after homing with T%d, T%d's probe triggered %+.3f mm from"
+            " where it does after homing with T%d. %s" % (
+                n, ref, dev, ref,
+                "Good: homing with either gives the same Z." if good else
+                "Too far apart: measure T%d again (Z offsets tab)." % (n,)))
+
+    # ---- Saving the Z offset adjustment (babysteps) -------------------------
+    # Mainsail's "Save" next to the Z offset runs Z_OFFSET_APPLY_PROBE, which
+    # writes the [tool_probe_endstop] z_offset nothing reads. Save it to the
+    # tool that is on instead:
+    #  - the reference tool (T0) defines Z for all of them: every tool's
+    #    probe z_offset moves, effective from the next Z home (the
+    #    adjustment stays in place until then);
+    #  - any other tool: its gcode_z_offset takes the adjustment over, now.
+    def _apply_babystep(self, orig, gcmd):
+        tc = self.toolchanger
+        probes = self._registered_probes()
+        active = self._active_number()
+        names = {n: getattr(p, 'name', None) for n, p in probes.items()}
+        if (tc is None or active not in probes
+                or not all(n and n.startswith('tool_probe ')
+                           for n in names.values())
+                or not all(hasattr(getattr(p, 'probe_offsets', None),
+                                   'z_offset') for p in probes.values())):
+            # No toolchanger probe setup this understands: Klipper's own
+            return orig(gcmd)
+        if tc.status == 'changing':
+            raise gcmd.error("Not during a tool change")
+        now = self.reactor.monotonic()
+        gcode_move = self.printer.lookup_object('gcode_move')
+        delta = gcode_move.get_status(now)['homing_origin'][2] \
+            - self.babystep_saved
+        if abs(delta) < 0.0005:
+            gcmd.respond_info("No unsaved Z offset adjustment to save")
+            return
+        ref = self._ref_tool(probes)
+        probe_z = {n: self._probe_z_offset(p) for n, p in probes.items()}
+        tool = self._tool(active)
+        changes = babystep_changes(delta, active, ref, probe_z,
+                                   tool.gcode_z_offset or 0.)
+        edits = []
+        for n, c in sorted(changes.items()):
+            if 'probe_z' in c:
+                edits.append((names[n], 'z_offset', '%.3f' % c['probe_z']))
+            if 'gcode_z' in c:
+                edits.append((self._tool(n).name, 'gcode_z_offset',
+                              '%.3f' % c['gcode_z']))
+        try:
+            files = self._save_options(edits)
+        except Exception as e:
+            raise gcmd.error("Z offset not saved: %s" % (e,))
+        for n, c in changes.items():
+            if 'probe_z' in c:
+                probes[n].probe_offsets.z_offset = c['probe_z']
+        if active == ref:
+            self.babystep_saved += delta
+            gcmd.respond_info(
+                "Saved the Z offset adjustment %+.3f: T%d sets Z for every"
+                " tool, so every tool's probe z_offset moved by %+.3f (%s)."
+                " It takes effect at the next Z home; the adjustment stays in"
+                " place until then." % (delta, ref, -delta, ', '.join(files)))
+        else:
+            old = tool.gcode_z_offset or 0.
+            tool.set_parameter('gcode_z_offset', changes[active]['gcode_z'])
+            gcode_move.reset_last_position()
+            # The tool's offset holds it now: no motion
+            self.gcode.run_script_from_command(
+                "SET_GCODE_OFFSET Z_ADJUST=%.4f MOVE=0" % (-delta,))
+            gcmd.respond_info(
+                "Saved the Z offset adjustment %+.3f to T%d: gcode_z_offset"
+                " %.3f -> %.3f (%s), active now." % (
+                    delta, active, old, changes[active]['gcode_z'],
+                    ', '.join(files)))
+
+    def _home_rails_end(self, homing_state, rails):
+        if 2 in homing_state.get_axes():
+            # Z set from the probes again: nothing saved is pending
+            self.babystep_saved = 0.
+
+    # ---- Writing tool config files -----------------------------------------
+    def _save_options(self, edits):
+        """Write (section, key, value) edits to the files Klipper reads them
+        from, the way the web page does: following [include] order, keeping
+        comments, backing each file up to toolconfig-backups/. Nothing is
+        written if any edit can't be placed. Returns the paths written."""
+        main = self.printer.get_start_args()['config_file']
+        root = os.path.dirname(main)
+        autosave = cfg_autosave(_read(main))
+        by_file = {}
+        for section, key, value in edits:
+            if autosave.get(_cfg_norm(section), {}).get(key.lower()) is not None:
+                raise Exception(
+                    "[%s] %s is set in printer.cfg's SAVE_CONFIG block, which"
+                    " overrides the tool file; remove it there" % (section, key))
+            path = cfg_locate(main, section, key)
+            if path is None:
+                raise Exception("[%s] is not in any config file" % (section,))
+            if (os.path.islink(path) or 'readonly-configs' in path
+                    or os.path.basename(path) == 'toolchanger-safety.cfg'):
+                raise Exception("[%s] %s comes from %s, which is read-only"
+                                % (section, key, os.path.relpath(path, root)))
+            if path not in by_file:
+                text = _read(path)
+                by_file[path] = [text, text]  # original, edited
+            by_file[path][1] = cfg_set_option(by_file[path][1], section, key,
+                                              value)
+        stamp = time.strftime('%Y-%m-%dT%H-%M-%S', time.gmtime())
+        backups = os.path.join(root, 'toolconfig-backups')
+        written = []
+        for path, (old, new) in by_file.items():
+            rel = os.path.relpath(path, root)
+            if new != old:
+                if not os.path.isdir(backups):
+                    os.makedirs(backups)
+                with open(os.path.join(backups, '%s.%s.bak' % (
+                        rel.replace(os.sep, '__'), stamp)), 'w',
+                        newline='') as f:
+                    f.write(old)
+                with open(path, 'w', newline='') as f:
+                    f.write(new)
+            written.append(rel)
+        return written
 
     cmd_TC_SET_Z_OFFSET_help = (
         "Apply a tool's Z offsets now, until restart:"
@@ -594,6 +920,12 @@ class ToolchangerUI:
                 for n, p in self._registered_probes().items()},
             # last TC_MEASURE_Z, or None
             'z_measure': self.z_measure,
+            # last TC_CHECK_Z, or None
+            'z_check': self.z_check,
+            # Z offset adjustment (babysteps) not saved yet
+            'babystep_unsaved': round(self.printer.lookup_object(
+                'gcode_move').get_status(eventtime)['homing_origin'][2]
+                - self.babystep_saved, 4),
         }
 
 def load_config(config):

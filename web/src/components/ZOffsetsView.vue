@@ -98,6 +98,50 @@ const refRow = computed(() => rows.value.find((r) => r.isRef))
 // T0 measured right after homing with it should trigger at its own z_offset
 const refCheck = computed(() => (refRow.value ? refRow.value.v.trigger - refRow.value.v.probe_z_offset : null))
 const when = computed(() => (m.value ? new Date(m.value.time * 1000).toLocaleString() : ''))
+
+// ---- check: home with the tool, probe with the reference ----
+const zCheck = computed(() => (ui.value.z_check ?? null) as { tool: number; reference: number; deviation: number; time: number } | null)
+const movable = computed(
+  () => ui.value.sensors === 'tool_probe' && homed.value === 'xyz' && tc.value.status === 'ready' && !isPrinting.value && !state.busy,
+)
+function canCheck(n: number) {
+  const pair = tools.value.filter((t) => t.number === n || t.number === m.value?.reference)
+  return movable.value && pair.length === 2 && pair.every((t) => !t.warnings.length && (t.temp ?? 0) <= 150)
+}
+async function check(n: number) {
+  error.value = ''
+  note.value = ''
+  try {
+    await run(`TC_CHECK_Z T=${n} REF=${m.value!.reference} X=${m.value!.x} Y=${m.value!.y}`, `Check T${n} Z`)
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
+// ---- revert to the values from before the measurement ----
+function changedSince(r: (typeof rows.value)[number]) {
+  return Math.abs(r.nowProbe - r.v.probe_z_offset) >= 0.0005 || Math.abs(r.nowGcode - r.v.gcode_z_offset) >= 0.0005
+}
+async function revert(r: (typeof rows.value)[number]) {
+  const p = r.v.probe_z_offset
+  const g = r.v.gcode_z_offset
+  if (!confirm(`Put ${r.label} back to probe z_offset ${f(p)}, gcode_z_offset ${f(g)} (its values before the measurement)?\n\nSaved to its file (backed up) and applied now.`)) return
+  await saveValues([{ r, probe: p, gcode: g }])
+}
+
+// ---- Z offset adjustment (babysteps) ----
+const unsaved = computed(() => Number(ui.value.babystep_unsaved ?? 0))
+const onTool = computed(() => tools.value.find((t) => t.active))
+const isRef = computed(() => onTool.value?.number === ref0.value)
+async function saveBabysteps() {
+  error.value = ''
+  note.value = ''
+  try {
+    await run('Z_OFFSET_APPLY_PROBE', 'Save Z offset adjustment')
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
 const f = (v: number | null | undefined, d = 3) => (v === null || v === undefined || isNaN(v) ? '-' : (v > 0 ? '+' : '') + v.toFixed(d))
 
 async function applySave() {
@@ -107,11 +151,17 @@ async function applySave() {
   if (!chosen.length) return
   const list = chosen.map((r) => `${r.label}: probe z_offset ${f(r.v.new_probe_z_offset)}, gcode_z_offset ${f(r.v.new_gcode_z_offset)}`).join('\n')
   if (!confirm(`Apply now and save to the tool files?\n\n${list}\n\nThe files are backed up first. No restart needed.`)) return
+  await saveValues(chosen.map((r) => ({ r, probe: r.v.new_probe_z_offset!, gcode: r.v.new_gcode_z_offset! })))
+}
+
+async function saveValues(list: { r: (typeof rows.value)[number]; probe: number; gcode: number }[]) {
+  error.value = ''
+  note.value = ''
   try {
     await configIndex.load()
-    const edits = chosen.flatMap((r) => [
-      { section: `tool_probe T${r.n}`, key: 'z_offset', value: r.v.new_probe_z_offset!.toFixed(3) },
-      { section: r.name, key: 'gcode_z_offset', value: r.v.new_gcode_z_offset!.toFixed(3) },
+    const edits = list.flatMap(({ r, probe, gcode }) => [
+      { section: `tool_probe T${r.n}`, key: 'z_offset', value: probe.toFixed(3) },
+      { section: r.name, key: 'gcode_z_offset', value: gcode.toFixed(3) },
     ])
     // A value in printer.cfg's SAVE_CONFIG block wins over the tool's file
     const shadowed = edits.filter((e) => configIndex.autosaveValue(e.section, e.key) !== undefined)
@@ -121,8 +171,8 @@ async function applySave() {
       )
     }
     const files = await configIndex.write(edits)
-    for (const r of chosen) {
-      await run(`TC_SET_Z_OFFSET T=${r.n} PROBE_Z=${r.v.new_probe_z_offset!.toFixed(3)} GCODE_Z=${r.v.new_gcode_z_offset!.toFixed(3)}`, `Apply ${r.label} Z offsets`)
+    for (const { r, probe, gcode } of list) {
+      await run(`TC_SET_Z_OFFSET T=${r.n} PROBE_Z=${probe.toFixed(3)} GCODE_Z=${gcode.toFixed(3)}`, `Apply ${r.label} Z offsets`)
     }
     note.value = `Saved to ${files.join(', ')} and active now.`
   } catch (e: any) {
@@ -177,7 +227,7 @@ async function applySave() {
         <div class="panel-body stack">
           <table class="list">
             <thead>
-              <tr><th></th><th>Tool</th><th>Trigger</th><th>Probe z_offset</th><th>gcode_z_offset</th></tr>
+              <tr><th></th><th>Tool</th><th>Trigger</th><th>Probe z_offset</th><th>gcode_z_offset</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="r in rows" :key="r.n">
@@ -190,10 +240,23 @@ async function applySave() {
                 <template v-if="r.isRef">
                   <td class="mono">{{ f(r.nowProbe) }} <span class="muted">reference</span></td>
                   <td class="mono">{{ f(r.nowGcode) }} <span class="muted">reference</span></td>
+                  <td></td>
                 </template>
                 <template v-else>
                   <td class="mono">{{ f(r.nowProbe) }} → <b>{{ f(r.v.new_probe_z_offset) }}</b></td>
                   <td class="mono">{{ f(r.nowGcode) }} → <b>{{ f(r.v.new_gcode_z_offset) }}</b><span v-if="r.applied" class="ok-text"> applied</span></td>
+                  <td class="acts">
+                    <button
+                      class="small"
+                      :disabled="!canCheck(r.n)"
+                      :title="`Home Z with ${r.label}, then probe with ${refRow?.label ?? 'the reference'}: matching offsets give the same Z (moves, heats both nozzles to probe temperature)`"
+                      @click="check(r.n)"
+                    >Check</button>
+                    <button v-if="changedSince(r)" class="small" :disabled="!!state.busy" title="Back to its values from before the measurement" @click="revert(r)">Revert</button>
+                    <div v-if="zCheck && zCheck.tool === r.n" class="small mono" :class="Math.abs(zCheck.deviation) <= SPREAD ? 'ok-text' : 'warn-text'">
+                      {{ Math.abs(zCheck.deviation) <= SPREAD ? '✓' : '✗' }} Z zeros {{ f(zCheck.deviation) }} apart
+                    </div>
+                  </td>
                 </template>
               </tr>
             </tbody>
@@ -207,6 +270,24 @@ async function applySave() {
             <button class="primary" :disabled="!apply.length || !!state.busy" @click="applySave">Apply and save {{ apply.map((n) => 'T' + n).join(', ') }}</button>
           </div>
           <div v-if="note" class="callout ok">{{ note }}</div>
+        </div>
+      </div>
+      <div class="panel">
+        <header class="panel-head"><h2 class="grow">Z offset adjustment (babysteps)</h2></header>
+        <div class="panel-body stack">
+          <p class="small">
+            Adjust the first layer with Mainsail's Z offset buttons as usual. <b>Save</b> (here or in Mainsail) stores it on the tool that is on, in its config file, with no restart:
+          </p>
+          <ul class="muted small expl">
+            <li><b>{{ probeTools.find((t) => t.number === ref0)?.label ?? 'T0' }}</b> sets Z for every tool: every tool's probe z_offset moves by the same amount. It takes effect at the next Z home; the adjustment stays in place until then.</li>
+            <li><b>Any other tool</b>: its gcode_z_offset takes the adjustment over right away.</li>
+          </ul>
+          <div class="row">
+            <span class="mono">Unsaved: {{ f(unsaved) }} mm</span>
+            <span class="muted small">{{ onTool ? `${onTool.label} is on${isRef ? ' (reference)' : ''}` : 'no tool on' }}</span>
+            <span class="grow" />
+            <button class="blue" :disabled="Math.abs(unsaved) < 0.0005 || !onTool || !!state.busy" @click="saveBabysteps">Save {{ f(unsaved) }} mm to {{ onTool?.label ?? 'the tool' }}</button>
+          </div>
         </div>
       </div>
       <div v-if="error" class="callout err">{{ error }}</div>
@@ -231,4 +312,6 @@ p { margin: 0; }
 .checks .bad { color: var(--warn); }
 .warn-text { color: var(--warn); }
 .ok-text { color: var(--ok); }
+.acts { white-space: nowrap; }
+.acts button + button { margin-left: 4px; }
 </style>

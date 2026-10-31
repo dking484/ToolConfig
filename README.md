@@ -79,6 +79,8 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 | `TC_CLEAR_ACTIVE_TOOL` | Forget the active tool without moving (Python helper) |
 | `TC_MEASURE_Z [TOOLS=0,1] [REF=0] [X= Y=]` | Probe one bed spot with each tool's own probe and propose its Z offsets (see below) |
 | `TC_SET_Z_OFFSET T=n [PROBE_Z=] [GCODE_Z=]` | Apply a tool's probe `z_offset` / `gcode_z_offset` now, until restart |
+| `TC_CHECK_Z T=n [X= Y=]` | Home Z with tool n, then probe with T0: shows how far apart their Z zeros are |
+| `Z_OFFSET_APPLY_PROBE` | Mainsail's Z offset **Save**: now saves the adjustment to the tool that is on (see below) |
 
 **Web page (`web/`)**
 - **Tools**: every tool with dock position, offsets, nozzle, probe offset,
@@ -119,6 +121,25 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
   no restart. T0 keeps its own values: it defines Z. A value for the same key
   in printer.cfg's SAVE_CONFIG block would win over the file, so the page
   refuses until it is removed there.
+
+  **Check** (per tool) homes Z with that tool, then probes the same spot with
+  T0: with matching offsets T0 triggers where it does after homing with
+  itself (within 0.02 mm). It ends with Z homed by T0 again. **Revert** puts a
+  tool back to its values from before the measurement.
+
+  **Z offset adjustment (babysteps).** Mainsail's Z offset **Save** runs
+  `Z_OFFSET_APPLY_PROBE`, which on a toolchanger wrote a
+  `[tool_probe_endstop] z_offset` that nothing reads. ToolConfig saves it to
+  the tool that is on instead, in its config file (backed up), with no
+  restart and no `SAVE_CONFIG`:
+  - **T0** sets Z for every tool, so every tool's probe `z_offset` moves by
+    the adjustment. It takes effect at the next Z home; the adjustment stays
+    applied until then (saving again only adds what changed since).
+  - **Any other tool**: its `gcode_z_offset` takes the adjustment over right
+    away, without moving.
+
+  The Z offsets tab has the same **Save** button. To keep Klipper's own
+  behaviour, set `save_babysteps_to_tool: False` under `[toolchanger_ui]`.
 - **Slicer check**: scans a G-code file for commands this Klipper does not
   have and checks the OrcaSlicer profile embedded in it (single-nozzle
   multi-material mode, nozzle sizes per tool, extruder offsets, PRINT_START
