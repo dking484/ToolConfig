@@ -44,6 +44,8 @@ window.addEventListener('hashchange', () => (tab.value = readTab()))
 const klippyClass = computed(() => (state.klippy === 'ready' ? 'ok' : state.klippy === 'startup' ? 'warn' : 'err'))
 const tcClass = computed(() => ({ ready: 'ok', changing: 'info', initializing: 'info', error: 'err' })[tc.value.status as string] ?? 'warn')
 const qgl = computed(() => status.value.quad_gantry_level?.applied)
+// "mcu 'EBBT4': Unable to connect" after a board swap: point to the fix
+const lostBoard = computed(() => state.klippyMessage.match(/mcu '([^']+)': Unable to connect/)?.[1] ?? '')
 </script>
 
 <template>
@@ -83,6 +85,10 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
     <div v-if="state.klippy !== 'ready' && state.connection === 'open'" class="callout err">
       <strong>Klipper is {{ state.klippy }}.</strong>
       <pre class="mono klippy-msg">{{ state.klippyMessage }}</pre>
+      <p v-if="lostBoard" class="hint">
+        Klipper can't reach board <b>{{ lostBoard }}</b>. If you replaced it, the new board has a different CAN ID:
+        <a href="#hardware" @click="tab = 'hardware'">assign it under Boards &amp; IDs</a>, then restart. Otherwise check its power and CAN wiring.
+      </p>
       <div class="row">
         <button class="primary" @click="firmwareRestart">Firmware restart</button>
         <template v-if="lastChange">
@@ -130,4 +136,5 @@ const qgl = computed(() => status.value.quad_gantry_level?.applied)
 .status-pills { justify-content: flex-end; }
 main { max-width: 1400px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .klippy-msg { white-space: pre-wrap; margin: 6px 0 10px; }
+.hint { margin: 0 0 10px; }
 </style>
