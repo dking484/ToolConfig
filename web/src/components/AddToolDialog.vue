@@ -13,7 +13,7 @@ const disabledNums = ref<number[]>([])
 const number = ref(0)
 const source = ref<number>(tools.value[0]?.number ?? 0)
 const mcuName = ref('')
-const board = ref<'can' | 'usb' | 'later'>('can')
+const board = ref<'can' | 'usb'>('can')
 const uuid = ref('')
 const serial = ref('')
 const nozzle = ref('')
@@ -90,7 +90,7 @@ async function generate() {
       dstNumber: number.value,
       srcMcu: t.mcu?.name ?? null,
       dstMcu: mcuName.value,
-      board: board.value === 'can' ? { kind: 'can', uuid: uuid.value.trim().toLowerCase() } : board.value === 'usb' ? { kind: 'usb', serial: serial.value.trim() } : { kind: 'later' },
+      board: board.value === 'can' ? { kind: 'can', uuid: uuid.value.trim().toLowerCase() } : { kind: 'usb', serial: serial.value.trim() },
       nozzle: nozzle.value.trim() || undefined,
       sensorType: sensor.value.trim() || undefined,
       maxTemp: maxTemp.value.trim() || undefined,
@@ -141,7 +141,6 @@ async function generate() {
               <select v-model="board">
                 <option value="can">CAN bus (UUID)</option>
                 <option value="usb">USB (serial path)</option>
-                <option value="later">Decide later (create it disabled)</option>
               </select>
             </label>
           </div>
@@ -160,7 +159,6 @@ async function generate() {
               <button v-for="p in serials" :key="p" class="small mono" :class="{ blue: serial === p }" @click="serial = p">{{ p.replace('/dev/serial/by-id/', '') }}</button>
             </div>
           </div>
-          <p v-if="board === 'later'" class="muted small">The file is created in {{ DISABLED_DIR }}/ with the board set to SET_ME, so Klipper keeps starting. Set the board and enable it from the Tools tab later.</p>
         </fieldset>
 
         <fieldset>

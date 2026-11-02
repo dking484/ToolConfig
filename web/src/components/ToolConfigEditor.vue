@@ -5,7 +5,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { normalizeSection, parseCfg, removeOption, setOption } from '../lib/cfgEdit'
 import { diffCfg, kindOf, liveCommand, type FieldDef } from '../lib/toolSchema'
-import { configIndex, DISABLED_DIR, enableToolFile, isPrinting, moveConfigFile, mr, recordChange, state, tryRun } from '../store'
+import { configIndex, DISABLED_DIR, enableToolFile, isPrinting, mr, recordChange, state, tryRun } from '../store'
 
 const props = defineProps<{
   mode: 'edit' | 'create'
@@ -25,7 +25,6 @@ const saving = ref(false)
 const error = ref('')
 const editable = ref(true)
 const showChanges = ref(false)
-const createDisabled = ref(false)
 const overrides = ref<Record<string, string>>({}) // "section|key" -> where it is overridden
 const isDisabled = computed(() => props.path.startsWith(DISABLED_DIR + '/'))
 
@@ -34,7 +33,6 @@ onMounted(async () => {
     if (props.mode === 'create') {
       original.value = ''
       text.value = props.initialText ?? ''
-      createDisabled.value = /SET_ME/.test(text.value)
     } else {
       const t = await mr.getText('config', props.path)
       original.value = t
@@ -129,14 +127,12 @@ async function save() {
   try {
     if (props.mode === 'create') {
       const name = props.path.split('/').pop()!
-      const target = createDisabled.value ? `${DISABLED_DIR}/${name}` : props.path
+      const target = props.path
       const existing = await mr.call('server.files.get_directory', { path: `config/${target.slice(0, target.lastIndexOf('/'))}` }).catch(() => ({ files: [] }))
       if ((existing.files ?? []).some((f: any) => f.filename === name)) throw new Error(`${target} already exists`)
       await mr.upload('config', target, text.value)
-      if (!createDisabled.value) {
-        recordChange({ kind: 'create', path: target, label: props.title, time: Date.now() })
-        if (!state.pendingRestart.includes(props.title)) state.pendingRestart.push(props.title)
-      }
+      recordChange({ kind: 'create', path: target, label: props.title, time: Date.now() })
+      if (!state.pendingRestart.includes(props.title)) state.pendingRestart.push(props.title)
     } else {
       const list = diff.value.changes.map((c) => `${c.section} › ${c.key}: ${c.before ?? '(unset)'} → ${c.after ?? '(removed)'}${c.apply === 'live' ? '   [live]' : ''}`).join('\n')
       if (!confirm(`Save ${props.path}?\n\n${list || '(comment/format changes only)'}\n\nA backup goes to config/toolconfig-backups/.`)) return
@@ -159,20 +155,9 @@ async function save() {
   }
 }
 
-async function disableTool() {
-  if (!confirm(`Disable ${props.title}?\n\nIts file moves to config/${DISABLED_DIR}/ (not deleted), so Klipper stops loading it after a restart. You can enable it again from the Tools tab.`)) return
-  try {
-    const to = `${DISABLED_DIR}/${props.path.split('/').pop()}`
-    await moveConfigFile(props.path, to)
-    recordChange({ kind: 'disable', from: props.path, to, label: `Disable ${props.title}`, time: Date.now() })
-    if (!state.pendingRestart.includes(`disable ${props.title}`)) state.pendingRestart.push(`disable ${props.title}`)
-    emit('saved')
-    emit('close')
-  } catch (e: any) {
-    error.value = e.message
-  }
-}
-
+// Disabling tools was removed: Klipper only loads extruders numbered without
+// gaps, so disabling T2 stopped T3 and T4 loading. A tool already in the
+// disabled folder can still be enabled.
 async function enableTool() {
   try {
     if (!(await enableToolFile(props.path, props.title))) return
@@ -257,7 +242,6 @@ const lineCount = computed(() => text.value.split('\n').length)
             <li v-for="c in diff.changes" :key="c.section + c.key">[{{ c.section }}] {{ c.key }}: {{ c.before ?? '(unset)' }} → {{ c.after ?? '(removed)' }} <b :class="c.apply">{{ c.apply }}</b></li>
           </ul>
         </div>
-        <label v-if="mode === 'create'" class="row small"><input v-model="createDisabled" type="checkbox" /> Create it disabled (in {{ DISABLED_DIR }}/). Use this if its board isn't connected yet, so Klipper still starts.</label>
         <div v-if="error" class="callout err">{{ error }}</div>
 
         <div v-if="isDisabled && !loading" class="row">
@@ -266,12 +250,11 @@ const lineCount = computed(() => text.value.split('\n').length)
           <button @click="emit('close')">Close</button>
         </div>
         <div v-else class="row">
-          <button v-if="mode === 'edit' && editable" class="danger ghost" :disabled="saving" @click="disableTool">Disable tool…</button>
           <span class="grow" />
           <button v-if="mode === 'edit'" :disabled="!dirty || saving" @click="text = original">Revert</button>
           <button @click="closeAsk">Cancel</button>
           <button class="primary" :disabled="saving || !editable || (mode === 'edit' && !dirty) || blocking.length > 0" @click="save">
-            {{ saving ? 'Saving…' : mode === 'create' ? (createDisabled ? 'Create (disabled)' : 'Create tool') : 'Save' }}
+            {{ saving ? 'Saving…' : mode === 'create' ? 'Create tool' : 'Save' }}
           </button>
         </div>
         <p v-if="!isDisabled" class="muted small">

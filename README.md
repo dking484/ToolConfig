@@ -95,10 +95,8 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 - **Add a tool**: copies an existing tool's file and renumbers everything
   (board, extruder, fans, LEDs, macro, probe, accelerometer), sets the CAN UUID
   (scan) or USB serial, nozzle, thermistor, max temp, and leaves the dock
-  position invalid until it is taught. Review it in the editor before creating;
-  "decide later" creates it disabled.
-- **Disable / enable tools**: files move to/from `toolchanger/tools-disabled/`.
-  If Klipper won't start after a change, **Undo the last ToolConfig change**
+  position invalid until it is taught. Review it in the editor before creating.
+- **Undo**: if Klipper won't start after a change, **Undo the last ToolConfig change**
   restores the previous files and restarts.
 - **Quick edits**: change any of those. Values are written to the file Klipper reads
   them from (following `[include]` order), comments are kept, a backup goes to
