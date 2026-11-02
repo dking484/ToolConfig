@@ -204,7 +204,7 @@ const lineCount = computed(() => text.value.split('\n').length)
 
       <div class="panel-body stack">
         <p v-if="loading" class="muted">Reading your config files…</p>
-        <div v-if="!editable && isDisabled" class="callout warn">{{ title }} is disabled, so it's read-only. Enable it to edit.</div>
+        <div v-if="!editable && isDisabled" class="callout warn">{{ title }} is disabled. Enable it to edit.</div>
         <div v-else-if="!editable" class="callout warn">This file is read-only here (it's a symlink into another repo). View only.</div>
 
         <!-- ===================== VISUAL ===================== -->
