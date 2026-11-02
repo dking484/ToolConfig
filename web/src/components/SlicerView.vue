@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { analyze, GcodeScanner, macroParams, type Finding, type PrinterFacts, type ScanResult } from '../lib/gcodeCheck'
-import { mr, tools } from '../store'
+import { mr, state, tools } from '../store'
 
 interface GFile { path: string; modified: number; size: number }
 
@@ -16,15 +16,22 @@ const findings = ref<Finding[] | null>(null)
 const scanInfo = ref<ScanResult | null>(null)
 let abort: AbortController | null = null
 
-onMounted(async () => {
-  try {
-    const list: GFile[] = await mr.call('server.files.list', { root: 'gcodes' })
-    files.value = list.filter((f) => /\.(gcode|gco|g)$/i.test(f.path)).sort((a, b) => b.modified - a.modified)
-    picked.value = files.value[0]?.path ?? ''
-  } catch (e: any) {
-    error.value = e.message
-  }
-})
+// Once Moonraker's socket is open (on a page load it isn't yet when this mounts)
+watch(
+  () => state.connection,
+  async (c) => {
+    if (c !== 'open') return
+    try {
+      const list: GFile[] = await mr.call('server.files.list', { root: 'gcodes' })
+      files.value = list.filter((f) => /\.(gcode|gco|g)$/i.test(f.path)).sort((a, b) => b.modified - a.modified)
+      picked.value = files.value[0]?.path ?? ''
+      error.value = ''
+    } catch (e: any) {
+      error.value = e.message
+    }
+  },
+  { immediate: true },
+)
 
 async function facts(): Promise<PrinterFacts> {
   const res = await mr.call('printer.objects.query', { objects: { gcode: ['commands'], configfile: ['config'] } })

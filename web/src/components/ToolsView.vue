@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { configIndex, detectTool, DISABLED_DIR, dockTool, homed, isPrinting, listConfigDir, moveConfigFile, recordChange, state, tc, tools, TOOLS_DIR, tryRun, unadoptedTool } from '../store'
+import { computed, ref, watch } from 'vue'
+import { configIndex, detectTool, DISABLED_DIR, dockTool, firmwareRestart, homed, isPrinting, listConfigDir, moveConfigFile, recordChange, state, tc, tools, TOOLS_DIR, tryRun, unadoptedTool } from '../store'
 import type { ToolInfo } from '../lib/tools'
 import { extruderName } from '../lib/toolTemplate'
 import ToolCard from './ToolCard.vue'
@@ -20,7 +20,23 @@ const fromConfig = computed(() => tools.value.some((t) => t.source === 'config')
 async function refreshDisabled() {
   disabled.value = (await listConfigDir(DISABLED_DIR)).filter((f) => f.endsWith('.cfg')).sort()
 }
-onMounted(refreshDisabled)
+// Not onMounted: on a page load this tab mounts before Moonraker's socket is
+// open, and the listing would come back empty
+watch(
+  () => state.connection,
+  (c) => {
+    if (c === 'open') refreshDisabled()
+  },
+  { immediate: true },
+)
+// Disabled since Klipper last started: it still has them loaded
+const disabledLoaded = computed(() =>
+  tools.value.filter((t) => t.source === 'klipper' && disabled.value.includes(`${t.label}.cfg`)).map((t) => t.label),
+)
+async function restartNow() {
+  if (!confirm('Restart Klipper now?\n\nIt unloads the disabled tools. Homing and QGL are lost.')) return
+  await firmwareRestart()
+}
 
 function select(t: ToolInfo) {
   tryRun(`T${t.number}`, `Select T${t.number}`)
@@ -38,7 +54,13 @@ async function edit(t: ToolInfo) {
   try {
     await configIndex.load()
     const loc = configIndex.locate(t.name, 'tool_number')
-    if (!loc) throw new Error(`Can't find the file that defines [${t.name}]`)
+    if (!loc) {
+      // Disabled since Klipper started: its file is in the disabled folder now
+      await refreshDisabled()
+      const file = disabled.value.find((f) => f === `${t.label}.cfg`)
+      if (file) return editDisabled(file)
+      throw new Error(`Can't find the file that defines [${t.name}]`)
+    }
     editing.value = { path: loc.file.path, title: t.label, toolNumber: t.number, extruder: t.extruder }
   } catch (e: any) {
     error.value = e.message
@@ -77,6 +99,13 @@ async function enable(file: string) {
     <div v-if="fromConfig" class="callout info">
       Klipper isn't running, so these tools are read from the config files. Live values (temperatures, sensors, board status) come back once it
       runs. You can still edit a tool and save it; restart Klipper afterwards.
+    </div>
+    <div v-if="disabledLoaded.length" class="callout warn row">
+      <span class="grow">
+        {{ disabledLoaded.join(', ') }} {{ disabledLoaded.length > 1 ? 'are' : 'is' }} disabled but still loaded until Klipper restarts. Edit or
+        enable {{ disabledLoaded.length > 1 ? 'them' : 'it' }} under <b>Disabled tools</b> below.
+      </span>
+      <button :disabled="isPrinting" @click="restartNow">Restart Klipper now</button>
     </div>
     <ProbeLive />
     <div class="cards">
