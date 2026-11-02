@@ -66,6 +66,18 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
   a temperature you set yourself is left alone.
 - `RESUME` re-detects the tool, then runs Mainsail's normal resume. The stock
   toolchanger `RESUME` skipped Mainsail's un-retract and temperature restore.
+- Z is not trusted after a failed tool change or a crash. A pickup that jams
+  in its dock can stall the gantry so the Z motors skip, while the printer
+  still counts as homed; printing on then pushes the nozzle into the bed.
+  `RESUME` refuses until Z is homed again or `TC_REHOME_Z` has re-set it:
+  with the tool on the gantry it probes a spot clear of the print (outside
+  every labelled object), corrects Z using that tool's probe `z_offset` and
+  the bed mesh, and checks a second spot (within 0.1 mm). It only works with
+  a tool whose probe `z_offset` was measured (Z offsets tab).
+- After any G-code error klipper-toolchanger forgets which tool is on (it
+  shows as "not initialized"). The tool on the gantry is now selected again
+  automatically (no motion, not during prints), and the page shows the error
+  with a hint.
 - `TOOL_ALIGN_*` fixed: works with docks at Y > 0, enters docking mode, uses
   real toolhead coordinates, leaves the dock along the pickup path before testing.
 
@@ -80,12 +92,20 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 | `TC_MEASURE_Z [TOOLS=0,1] [REF=0] [X= Y=]` | Probe one bed spot with each tool's own probe and propose its Z offsets (see below) |
 | `TC_SET_Z_OFFSET T=n [PROBE_Z=] [GCODE_Z=]` | Apply a tool's probe `z_offset` / `gcode_z_offset` now, until restart |
 | `TC_CHECK_Z T=n [X= Y=]` | Home Z with tool n, then probe with T0: shows how far apart their Z zeros are |
+| `TC_REHOME_Z [X= Y= X2= Y2=]` | Re-set Z with the tool on the gantry by probing two spots clear of the print (after a failed tool change) |
+| `TC_Z_SUSPECT MSG= [CLEAR=1]` | Mark Z as untrustworthy until it is homed or re-set (the failure handlers do this) |
 | `Z_OFFSET_APPLY_PROBE` | Mainsail's Z offset **Save**: now saves the adjustment to the tool that is on (see below) |
 
 **Web page (`web/`)**
 - **Tools**: every tool with dock position, offsets, nozzle, probe offset,
   input shaper, CAN/USB board and firmware, live temps, and sanity warnings
-  (e.g. dock positions outside the axis range).
+  (e.g. dock positions outside the axis range). A tool whose dock was never
+  taught (blank, 0/0/0 or -1/-1/-1) only offers **Find dock**. While Klipper
+  is down (a config error, a board it can't reach) the tools are read from
+  the config files, so they can still be seen and edited.
+- **Activity**: while homing, levelling or heating, the "Get the printer
+  ready" box shows what is running and for how long, heaters on their way to
+  temperature, the latest console message and the toolhead position.
 - **Edit a tool's whole config**: a **Visual editor**
   with a card per section (board, extruder, driver, fans, LEDs, tool, probe,
   accelerometer, macro; unknown keys too) and a **Code editor** with the raw
@@ -143,14 +163,18 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
   multi-material mode, nozzle sizes per tool, extruder offsets, PRINT_START
   parameters). Also checks pasted start/tool-change G-code.
 - **Boards & IDs**: all MCUs with CAN UUID / USB serial and firmware, and a
-  scan for unassigned CAN boards and USB serial devices.
+  scan for unassigned CAN boards and USB serial devices. Replaced a tool's
+  board? Click the new board's UUID and assign it to the tool: its
+  `canbus_uuid` is saved (backed up, undoable). This works while Klipper is
+  down because it can't reach the old board, and the error box links here.
 - **Matches Mainsail's theme**: dark/light mode, primary color, logo color,
   theme preset logo (or your `.theme/sidebar-logo.*`), read from Mainsail's
   settings in Moonraker (re-checked on focus and every minute). Status colors
   and the emergency stop stay fixed; `.theme/custom.css` is not applied (it
   targets Mainsail's own page).
 - **Recovery banner** on every tab when a tool change fails: probe states,
-  re-detect, back out, retry pickup, resume or cancel.
+  re-detect, back out, retry pickup, **Re-set Z**, resume (blocked until Z
+  is re-set) or cancel.
 
 ## Install
 
@@ -165,7 +189,7 @@ sudo systemctl restart klipper
 The built web app is committed in `web/dist`, so the printer needs no Node.
 Released versions are listed under
 [Releases](https://github.com/dking484/ToolConfig/releases); to install one,
-add `--branch v0.1.0` (or the version you want) to the `git clone`. Each
+add `--branch v0.2.0` (or the version you want) to the `git clone`. Each
 release also has a zip, but use the clone if you want Mainsail updates (below).
 
 With **klipper-toolchanger** (viesturz), the script prints where to add the
