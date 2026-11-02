@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { configIndex, detectTool, DISABLED_DIR, dockTool, firmwareRestart, homed, isPrinting, listConfigDir, moveConfigFile, recordChange, state, tc, tools, TOOLS_DIR, tryRun, unadoptedTool } from '../store'
+import { computed, ref, shallowRef, watch } from 'vue'
+import { configIndex, detectTool, DISABLED_DIR, dockTool, enableToolFile, firmwareRestart, homed, isPrinting, listConfigDir, mr, state, tc, tools, tryRun, unadoptedTool } from '../store'
 import type { ToolInfo } from '../lib/tools'
-import { extruderName } from '../lib/toolTemplate'
+import { normalizeSection, parseCfg } from '../lib/cfgEdit'
+import { toolsFromConfig } from '../lib/configTools'
 import ToolCard from './ToolCard.vue'
 import ToolConfigEditor from './ToolConfigEditor.vue'
 import AddToolDialog from './AddToolDialog.vue'
@@ -11,28 +12,65 @@ import ProbeLive from './ProbeLive.vue'
 const emit = defineEmits<{ go: [tab: 'dock'] }>()
 const editing = ref<{ path: string; title: string; toolNumber: number; extruder: string | null } | null>(null)
 const adding = ref(false)
-const disabled = ref<string[]>([])
 const error = ref('')
 // The tool on the gantry: selected by the toolchanger, or put there by hand
 const active = computed(() => tools.value.find((t) => t.active) ?? tools.value.find((t) => t.number === unadoptedTool.value))
 const fromConfig = computed(() => tools.value.some((t) => t.source === 'config'))
 
-async function refreshDisabled() {
-  disabled.value = (await listConfigDir(DISABLED_DIR)).filter((f) => f.endsWith('.cfg')).sort()
+// Tools Klipper doesn't have (or shouldn't) as it runs: disabled ones (their
+// file is in the disabled folder), and enabled or new ones it loads at the
+// next restart. Read from the files, shown as cards next to the live ones.
+interface FileTool {
+  tool: ToolInfo
+  file: string // config-relative path
+}
+const disabledTools = shallowRef<FileTool[]>([])
+const pendingTools = shallowRef<ToolInfo[]>([])
+const key = (t: ToolInfo) => normalizeSection(t.name)
+
+async function refreshFiles() {
+  try {
+    const files = (await listConfigDir(DISABLED_DIR)).filter((f) => f.endsWith('.cfg')).sort()
+    await configIndex.load()
+    const out: FileTool[] = []
+    for (const f of files) {
+      const path = `${DISABLED_DIR}/${f}`
+      const sections = parseCfg(await mr.getText('config', path))
+      const own = new Set(sections.filter((s) => /^tool\s/i.test(s.name)).map((s) => normalizeSection(s.name)))
+      // [toolchanger] defaults etc. come from the enabled files
+      for (const t of toolsFromConfig([...configIndex.files, { sections }], configIndex.autosave)) if (own.has(key(t))) out.push({ tool: t, file: path })
+    }
+    disabledTools.value = out
+    const live = new Set(tools.value.map(key))
+    pendingTools.value = state.klippy === 'ready' ? toolsFromConfig(configIndex.files, configIndex.autosave).filter((t) => !live.has(key(t))) : []
+  } catch (e: any) {
+    error.value = e.message
+  }
 }
 // Not onMounted: on a page load this tab mounts before Moonraker's socket is
 // open, and the listing would come back empty
 watch(
-  () => state.connection,
-  (c) => {
-    if (c === 'open') refreshDisabled()
+  () => [state.connection, state.klippy] as const,
+  ([c]) => {
+    if (c === 'open') refreshFiles()
   },
   { immediate: true },
 )
+
+type Card = { tool: ToolInfo; mode: 'normal' | 'disabled' | 'pending'; file?: string }
+const cards = computed<Card[]>(() => {
+  const dis = new Map(disabledTools.value.map((d) => [key(d.tool), d]))
+  // A tool disabled since Klipper started keeps its live card, marked disabled
+  const out: Card[] = tools.value.map((t) => (dis.has(key(t)) ? { tool: t, mode: 'disabled', file: dis.get(key(t))!.file } : { tool: t, mode: 'normal' }))
+  const shown = new Set(out.map((c) => key(c.tool)))
+  for (const d of disabledTools.value) if (!shown.has(key(d.tool))) out.push({ tool: d.tool, mode: 'disabled', file: d.file })
+  for (const t of pendingTools.value) if (!shown.has(key(t)) && !dis.has(key(t))) out.push({ tool: t, mode: 'pending' })
+  return out.sort((a, b) => a.tool.number - b.tool.number)
+})
+const enabledCount = computed(() => cards.value.filter((c) => c.mode !== 'disabled').length)
+const disabledCount = computed(() => cards.value.length - enabledCount.value)
 // Disabled since Klipper last started: it still has them loaded
-const disabledLoaded = computed(() =>
-  tools.value.filter((t) => t.source === 'klipper' && disabled.value.includes(`${t.label}.cfg`)).map((t) => t.label),
-)
+const disabledLoaded = computed(() => cards.value.filter((c) => c.mode === 'disabled' && c.tool.source === 'klipper').map((c) => c.tool.label))
 async function restartNow() {
   if (!confirm('Restart Klipper now?\n\nIt unloads the disabled tools. Homing and QGL are lost.')) return
   await firmwareRestart()
@@ -49,37 +87,26 @@ function dock(t: ToolInfo) {
   state.dockTool = t.number
   emit('go', 'dock')
 }
-async function edit(t: ToolInfo) {
+async function edit(c: Card) {
+  const t = c.tool
   error.value = ''
+  if (c.file) {
+    editing.value = { path: c.file, title: t.label, toolNumber: t.number, extruder: t.extruder }
+    return
+  }
   try {
     await configIndex.load()
     const loc = configIndex.locate(t.name, 'tool_number')
-    if (!loc) {
-      // Disabled since Klipper started: its file is in the disabled folder now
-      await refreshDisabled()
-      const file = disabled.value.find((f) => f === `${t.label}.cfg`)
-      if (file) return editDisabled(file)
-      throw new Error(`Can't find the file that defines [${t.name}]`)
-    }
+    if (!loc) throw new Error(`Can't find the file that defines [${t.name}]`)
     editing.value = { path: loc.file.path, title: t.label, toolNumber: t.number, extruder: t.extruder }
   } catch (e: any) {
     error.value = e.message
   }
 }
-function editDisabled(file: string) {
-  const n = Number(file.match(/^T(\d+)/)?.[1] ?? -1)
-  editing.value = { path: `${DISABLED_DIR}/${file}`, title: file.replace(/\.cfg$/, '') + ' (disabled)', toolNumber: n, extruder: n >= 0 ? extruderName(n) : null }
-}
-async function enable(file: string) {
-  if (!confirm(`Enable ${file}?\n\nIt moves back to ${TOOLS_DIR}/ and Klipper loads it after a restart. Its board must be connected, or Klipper won't start (you can undo).`)) return
+async function enable(c: Card) {
   error.value = ''
   try {
-    const from = `${DISABLED_DIR}/${file}`
-    const to = `${TOOLS_DIR}/${file}`
-    await moveConfigFile(from, to)
-    recordChange({ kind: 'enable', from, to, label: `Enable ${file}`, time: Date.now() })
-    if (!state.pendingRestart.includes(`enable ${file}`)) state.pendingRestart.push(`enable ${file}`)
-    await refreshDisabled()
+    if (await enableToolFile(c.file!, c.tool.label)) await refreshFiles()
   } catch (e: any) {
     error.value = e.message
   }
@@ -89,7 +116,10 @@ async function enable(file: string) {
 <template>
   <section class="stack">
     <div class="row">
-      <h2 class="grow">{{ tools.length }} tools <span v-if="!fromConfig" class="muted">· active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span></h2>
+      <h2 class="grow">
+        {{ enabledCount }} tools<span v-if="disabledCount" class="muted"> + {{ disabledCount }} disabled</span>
+        <span v-if="!fromConfig" class="muted"> · active: {{ tc.tool ? String(tc.tool).replace('tool ', '') : 'none' }}</span>
+      </h2>
       <button v-if="active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || active.warnings.length > 0" @click="park(active)">Dock {{ active.label }} (empty the gantry)</button>
       <button :disabled="!!state.busy || fromConfig" title="Read every tool sensor and select the tool that is on the gantry (no motion)" @click="detectTool()">Detect tool</button>
       <button :disabled="!!state.busy || isPrinting || fromConfig" @click="tryRun('INITIALIZE_TOOLCHANGER', 'Initialize')">Initialize changer</button>
@@ -102,25 +132,23 @@ async function enable(file: string) {
     </div>
     <div v-if="disabledLoaded.length" class="callout warn row">
       <span class="grow">
-        {{ disabledLoaded.join(', ') }} {{ disabledLoaded.length > 1 ? 'are' : 'is' }} disabled but still loaded until Klipper restarts. Edit or
-        enable {{ disabledLoaded.length > 1 ? 'them' : 'it' }} under <b>Disabled tools</b> below.
+        {{ disabledLoaded.join(', ') }} {{ disabledLoaded.length > 1 ? 'are' : 'is' }} disabled but still loaded until Klipper restarts.
       </span>
       <button :disabled="isPrinting" @click="restartNow">Restart Klipper now</button>
     </div>
     <ProbeLive />
     <div class="cards">
-      <ToolCard v-for="t in tools" :key="t.name" :tool="t" @select="select(t)" @park="park(t)" @edit="edit(t)" @dock="dock(t)" />
-    </div>
-
-    <div v-if="disabled.length" class="panel">
-      <header class="panel-head"><h2 class="grow">Disabled tools</h2><span class="muted small">config/{{ DISABLED_DIR }}/ · not loaded by Klipper</span></header>
-      <div class="panel-body">
-        <div v-for="f in disabled" :key="f" class="row dis">
-          <span class="mono grow">{{ f }}</span>
-          <button class="small" @click="editDisabled(f)">Edit file</button>
-          <button v-if="/^T\d+\.cfg$/.test(f)" class="small blue" :disabled="isPrinting" @click="enable(f)">Enable</button>
-        </div>
-      </div>
+      <ToolCard
+        v-for="c in cards"
+        :key="c.tool.name"
+        :tool="c.tool"
+        :mode="c.mode"
+        @select="select(c.tool)"
+        @park="park(c.tool)"
+        @edit="edit(c)"
+        @dock="dock(c.tool)"
+        @enable="enable(c)"
+      />
     </div>
 
     <ToolConfigEditor
@@ -131,15 +159,12 @@ async function enable(file: string) {
       :tool-number="editing.toolNumber"
       :extruder="editing.extruder"
       @close="editing = null"
-      @saved="refreshDisabled"
+      @saved="refreshFiles"
     />
-    <AddToolDialog v-if="adding" @close="adding = false" @created="refreshDisabled" />
+    <AddToolDialog v-if="adding" @close="adding = false" @created="refreshFiles" />
   </section>
 </template>
 
 <style scoped>
 .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
-.dis { padding: 6px 0; border-bottom: 1px solid var(--border); }
-.dis:last-child { border-bottom: none; }
-.small { font-size: 12.5px; }
 </style>

@@ -293,6 +293,15 @@ export async function moveConfigFile(from: string, to: string) {
   await ensureDir(to.slice(0, to.lastIndexOf('/')))
   await mr.call('server.files.move', { source: `config/${from}`, dest: `config/${to}` })
 }
+/** Move a disabled tool's file back into the tools folder (loaded at the next Klipper restart). Asks first; false if cancelled. */
+export async function enableToolFile(path: string, label: string): Promise<boolean> {
+  if (!confirm(`Enable ${label}?\n\nKlipper loads it after a restart. Its board must be connected, or Klipper won't start (you can undo).`)) return false
+  const to = `${TOOLS_DIR}/${path.split('/').pop()}`
+  await moveConfigFile(path, to)
+  recordChange({ kind: 'enable', from: path, to, label: `Enable ${label}`, time: Date.now() })
+  if (!state.pendingRestart.includes(`enable ${label}`)) state.pendingRestart.push(`enable ${label}`)
+  return true
+}
 export async function listConfigDir(path: string): Promise<string[]> {
   try {
     const res = await mr.call('server.files.get_directory', { path: `config/${path}` })

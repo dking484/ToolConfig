@@ -3,8 +3,10 @@ import { computed } from 'vue'
 import type { ToolInfo } from '../lib/tools'
 import { homed, isPrinting, lostBoard, probing, realign, safety, state, tc, unadoptedTool } from '../store'
 
-const props = defineProps<{ tool: ToolInfo }>()
-defineEmits<{ select: []; edit: []; dock: []; park: [] }>()
+// mode: 'disabled' = its file is in the disabled folder; 'pending' = enabled
+// or new, Klipper loads it at the next restart
+const props = withDefaults(defineProps<{ tool: ToolInfo; mode?: 'normal' | 'disabled' | 'pending' }>(), { mode: 'normal' })
+defineEmits<{ select: []; edit: []; dock: []; park: []; enable: [] }>()
 
 const f = (v: number | null | undefined, d = 1) => (v === null || v === undefined || isNaN(v) ? '-' : v.toFixed(d))
 const t = computed(() => props.tool)
@@ -23,11 +25,13 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
 </script>
 
 <template>
-  <article class="panel card" :class="{ active: t.active, failed }">
+  <article class="panel card" :class="{ active: t.active && mode === 'normal', failed, off: mode !== 'normal' }">
     <header class="panel-head">
       <span class="swatch" :style="{ background: t.color ?? 'var(--border)' }" />
       <h3>{{ t.label }}</h3>
-      <span v-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
+      <span v-if="mode === 'disabled'" class="pill"><span class="dot" />Disabled</span>
+      <span v-else-if="mode === 'pending'" class="pill warn" title="Klipper loads it at the next restart"><span class="dot" />Restart Klipper to load</span>
+      <span v-else-if="t.active && t.where !== 'dock'" class="pill ok"><span class="dot" />On gantry</span>
       <span v-else-if="t.active && probing" class="pill ok" title="The nozzle is touching the bed, which presses the Tap sensor"><span class="dot" />On gantry, probing</span>
       <span v-else-if="t.active" class="pill err" title="The toolchanger says this tool is mounted, but its sensor says it's in a dock (pressed, not seated, or not connected)"><span class="dot" />On gantry? sensor says dock</span>
       <span v-else-if="unselected && !otherSelected" class="pill warn" title="Its sensor says it's on the gantry, but the toolchanger hasn't selected it (put on by hand). Press Detect tool, or Dock to put it away."><span class="dot" />On gantry, not selected</span>
@@ -75,7 +79,11 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
         <li v-for="w in t.warnings" :key="w">{{ w }}</li>
       </ul>
     </div>
-    <footer class="row foot">
+    <footer v-if="mode !== 'normal'" class="row foot">
+      <button v-if="mode === 'disabled'" class="primary" :disabled="isPrinting" @click="$emit('enable')">Enable {{ t.label }}</button>
+      <button @click="$emit('edit')">Edit</button>
+    </footer>
+    <footer v-else class="row foot">
       <button v-if="unselected" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Select ${t.label} (it was put on by hand), then put it in its dock`" @click="$emit('park')">Dock {{ t.label }}</button>
       <button v-else-if="t.active" class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0" :title="t.warnings.length ? 'Its dock position is not valid yet' : `Put ${t.label} back in its dock (gantry ends up empty at safe Y)`" @click="$emit('park')">Dock {{ t.label }}</button>
       <button v-else class="blue" :disabled="homed !== 'xyz' || isPrinting || !!state.busy || t.warnings.length > 0 || !!blockedBy" :title="blockedBy ? `${blockedBy} is on the gantry but not selected: dock it or press Detect tool first` : ''" @click="$emit('select')">Pick up {{ t.label }}</button>
@@ -89,6 +97,7 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
 <style scoped>
 .card.active { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
 .card.failed { border-color: color-mix(in srgb, var(--err) 70%, var(--border)); }
+.card.off .panel-body { opacity: 0.6; }
 .swatch { width: 12px; height: 12px; border-radius: 3px; }
 .temp.hot { color: var(--warn); }
 .small { font-size: 12px; }

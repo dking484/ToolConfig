@@ -5,7 +5,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { normalizeSection, parseCfg, removeOption, setOption } from '../lib/cfgEdit'
 import { diffCfg, kindOf, liveCommand, type FieldDef } from '../lib/toolSchema'
-import { configIndex, DISABLED_DIR, isPrinting, moveConfigFile, mr, recordChange, state, tryRun } from '../store'
+import { configIndex, DISABLED_DIR, enableToolFile, isPrinting, moveConfigFile, mr, recordChange, state, tryRun } from '../store'
 
 const props = defineProps<{
   mode: 'edit' | 'create'
@@ -27,6 +27,7 @@ const editable = ref(true)
 const showChanges = ref(false)
 const createDisabled = ref(false)
 const overrides = ref<Record<string, string>>({}) // "section|key" -> where it is overridden
+const isDisabled = computed(() => props.path.startsWith(DISABLED_DIR + '/'))
 
 onMounted(async () => {
   try {
@@ -172,6 +173,16 @@ async function disableTool() {
   }
 }
 
+async function enableTool() {
+  try {
+    if (!(await enableToolFile(props.path, props.title))) return
+    emit('saved')
+    emit('close')
+  } catch (e: any) {
+    error.value = e.message
+  }
+}
+
 function closeAsk() {
   if (dirty.value && props.mode === 'edit' && !confirm('Discard your changes?')) return
   emit('close')
@@ -183,7 +194,7 @@ const lineCount = computed(() => text.value.split('\n').length)
   <div class="modal-back" @click.self="closeAsk">
     <div class="panel modal wide">
       <header class="panel-head head">
-        <h2 class="grow">{{ mode === 'create' ? 'New tool' : 'Edit' }} {{ title }} <span class="muted mono small">{{ path }}</span></h2>
+        <h2 class="grow">{{ mode === 'create' ? 'New tool' : 'Edit' }} {{ title }} <span v-if="!isDisabled" class="muted mono small">{{ path }}</span></h2>
         <div class="seg">
           <button :class="{ on: view === 'visual' }" @click="view = 'visual'">Visual editor</button>
           <button :class="{ on: view === 'code' }" @click="view = 'code'">Code editor</button>
@@ -193,12 +204,14 @@ const lineCount = computed(() => text.value.split('\n').length)
 
       <div class="panel-body stack">
         <p v-if="loading" class="muted">Reading your config files…</p>
-        <div v-if="!editable" class="callout warn">This file is read-only here (it's a symlink into another repo). View only.</div>
+        <div v-if="!editable && isDisabled" class="callout warn">{{ title }} is disabled, so it's read-only. Enable it to edit.</div>
+        <div v-else-if="!editable" class="callout warn">This file is read-only here (it's a symlink into another repo). View only.</div>
 
         <!-- ===================== VISUAL ===================== -->
         <template v-if="!loading && view === 'visual'">
           <div class="row">
-            <span class="muted small grow">A card per section of the file. Changes update the file text; switch to the code editor at any time to see or edit it directly.</span>
+            <span v-if="editable" class="muted small grow">A card per section of the file. Changes update the file text; switch to the code editor at any time to see or edit it directly.</span>
+            <span v-else class="grow" />
             <label class="row small muted"><input v-model="showUnset" type="checkbox" /> show unset fields</label>
           </div>
           <section v-for="c in cards" :key="c.name" class="card-sec">
@@ -208,7 +221,7 @@ const lineCount = computed(() => text.value.split('\n').length)
                 <label v-if="showUnset || c.values.has(f.key)" class="field" :class="{ code: f.type === 'code' }">
                   <span>
                     {{ f.label }}
-                    <span v-if="f.apply === 'live'" class="badge live" title="Applied immediately when saved, no restart">live</span>
+                    <span v-if="f.apply === 'live' && editable" class="badge live" title="Applied immediately when saved, no restart">live</span>
                     <span v-if="overrides[`${c.name.toLowerCase()}|${f.key}`]" class="badge warn" :title="`A later file overrides this: ${overrides[`${c.name.toLowerCase()}|${f.key}`]}`">overridden</span>
                   </span>
                   <textarea v-if="f.type === 'code'" :value="display(c.values.get(f.key)?.value, f)" rows="3" :disabled="!editable" @change="setField(c.name, f, ($event.target as HTMLTextAreaElement).value)" />
@@ -233,11 +246,11 @@ const lineCount = computed(() => text.value.split('\n').length)
         <!-- ===================== CODE ===================== -->
         <template v-if="!loading && view === 'code'">
           <textarea v-model="text" class="code-area" spellcheck="false" :rows="Math.min(40, Math.max(16, lineCount))" :readonly="!editable" />
-          <p class="muted small">{{ lineCount }} lines. Switch back to the visual editor and your edits show up in the cards.</p>
+          <p v-if="editable" class="muted small">{{ lineCount }} lines. Switch back to the visual editor and your edits show up in the cards.</p>
         </template>
 
         <!-- ===================== CHECKS + SAVE ===================== -->
-        <ul v-if="checks.length" class="checks"><li v-for="c in checks" :key="c">{{ c }}</li></ul>
+        <ul v-if="checks.length && !isDisabled" class="checks"><li v-for="c in checks" :key="c">{{ c }}</li></ul>
         <div v-if="mode === 'edit' && dirty" class="changes">
           <button class="ghost small" @click="showChanges = !showChanges">{{ showChanges ? '▾' : '▸' }} {{ diff.changes.length }} change(s){{ restartNeeded ? ' · needs a Klipper restart' : ' · all applied live' }}</button>
           <ul v-if="showChanges" class="mono small">
@@ -247,7 +260,12 @@ const lineCount = computed(() => text.value.split('\n').length)
         <label v-if="mode === 'create'" class="row small"><input v-model="createDisabled" type="checkbox" /> Create it disabled (in {{ DISABLED_DIR }}/). Use this if its board isn't connected yet, so Klipper still starts.</label>
         <div v-if="error" class="callout err">{{ error }}</div>
 
-        <div class="row">
+        <div v-if="isDisabled && !loading" class="row">
+          <button class="primary" :disabled="isPrinting" @click="enableTool">Enable {{ title }}</button>
+          <span class="grow" />
+          <button @click="emit('close')">Close</button>
+        </div>
+        <div v-else class="row">
           <button v-if="mode === 'edit' && editable" class="danger ghost" :disabled="saving" @click="disableTool">Disable tool…</button>
           <span class="grow" />
           <button v-if="mode === 'edit'" :disabled="!dirty || saving" @click="text = original">Revert</button>
@@ -256,7 +274,7 @@ const lineCount = computed(() => text.value.split('\n').length)
             {{ saving ? 'Saving…' : mode === 'create' ? (createDisabled ? 'Create (disabled)' : 'Create tool') : 'Save' }}
           </button>
         </div>
-        <p class="muted small">
+        <p v-if="!isDisabled" class="muted small">
           {{ mode === 'create' ? 'Creating a tool needs a Klipper restart (re-home afterwards).' : 'Dock position, offsets, input shaper, pressure advance and rotation distance apply immediately; everything else needs a Klipper restart.' }}
           If Klipper won't start afterwards, the page offers to undo the last change.
         </p>
