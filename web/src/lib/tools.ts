@@ -46,6 +46,23 @@ export interface McuInfo {
 
 const num = (v: any): number | null => (typeof v === 'number' && isFinite(v) ? v : null)
 
+/**
+ * Has this dock position never been taught? Blank, all three 0 (a default),
+ * or all three -1 (what Add tool writes).
+ */
+export function dockUnset(park: Xyz): boolean {
+  const v = [park.x, park.y, park.z]
+  return v.some((n) => typeof n !== 'number' || isNaN(n)) || v.every((n) => n === 0) || v.every((n) => n === -1)
+}
+
+/** Warnings for a dock position, shared by the live and the config-file tool lists. */
+export function dockWarnings(park: Xyz): string[] {
+  const missing = (['x', 'y', 'z'] as const).filter((a) => typeof park[a] !== 'number' || isNaN(park[a]))
+  if (missing.length) return missing.map((a) => `params_park_${a} is not set`)
+  if (dockUnset(park)) return [`Dock position not set (X ${park.x} · Y ${park.y} · Z ${park.z}): find the dock first`]
+  return []
+}
+
 /** "^EBBT0:PB6" / "EBBT0: PB13" -> "EBBT0" (null for main mcu pins) */
 export function pinMcu(pin: any): string | null {
   if (typeof pin !== 'string') return null
@@ -93,12 +110,13 @@ export function buildTools(status: Status): ToolInfo[] {
     const q = live !== undefined ? live : probes[String(number)]
     const warnings: string[] = []
 
-    ;(['x', 'y', 'z'] as const).forEach((axis, i) => {
-      const v = park[axis]
-      if (isNaN(v)) warnings.push(`params_park_${axis} is not set`)
-      else if (v < min[i] || v > max[i]) warnings.push(`Park ${axis.toUpperCase()} ${v} is outside the axis range ${min[i]}..${max[i]}`)
-    })
-    if (!isNaN(park.y) && typeof t.params_safe_y === 'number') {
+    warnings.push(...dockWarnings(park))
+    if (!dockUnset(park))
+      (['x', 'y', 'z'] as const).forEach((axis, i) => {
+        const v = park[axis]
+        if (v < min[i] || v > max[i]) warnings.push(`Park ${axis.toUpperCase()} ${v} is outside the axis range ${min[i]}..${max[i]}`)
+      })
+    if (!dockUnset(park) && typeof t.params_safe_y === 'number') {
       const approach = Math.max(0, ...((t.params_pickup_path as any[] | undefined) ?? []).map((p) => p.y ?? 0))
       if (t.params_safe_y < park.y + approach + 10) warnings.push(`Safe Y ${t.params_safe_y} is too close to the dock (park Y ${park.y}); the gantry would move sideways next to the docks`)
     }

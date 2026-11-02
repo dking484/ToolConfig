@@ -1,7 +1,7 @@
 // The tools as the config files define them, for when Klipper isn't running
 // (a config error, or a board it can't reach) and has no status to read.
 import { normalizeSection, type CfgSection } from './cfgEdit'
-import { pinMcu, type McuInfo, type ToolInfo } from './tools'
+import { dockWarnings, pinMcu, type McuInfo, type ToolInfo } from './tools'
 
 type Options = Map<string, string>
 
@@ -53,7 +53,7 @@ export function toolsFromConfig(files: { sections: CfgSection[] }[], autosave?: 
           : null
       const park = { x: num(opt('params_park_x')) ?? NaN, y: num(opt('params_park_y')) ?? NaN, z: num(opt('params_park_z')) ?? NaN }
       const warnings: string[] = []
-      ;(['x', 'y', 'z'] as const).forEach((a) => isNaN(park[a]) && warnings.push(`params_park_${a} is not set`))
+      warnings.push(...dockWarnings(park))
       if (mcuName && mcuName === unreachable) warnings.push(`Klipper can't reach its board ${mcuName}`)
       return {
         number,

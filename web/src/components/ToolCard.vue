@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ToolInfo } from '../lib/tools'
+import { dockUnset, type ToolInfo } from '../lib/tools'
 import { homed, isPrinting, lostBoard, probing, realign, safety, state, tc, unadoptedTool } from '../store'
 
 // mode: 'disabled' = its file is in the disabled folder; 'pending' = enabled
@@ -21,6 +21,8 @@ const unselected = computed(() => !t.value.active && unadoptedTool.value === pro
 const blockedBy = computed(() => (unadoptedTool.value !== null && unadoptedTool.value !== props.tool.number ? `T${unadoptedTool.value}` : ''))
 const hot = computed(() => (t.value.temp ?? 0) > 50)
 const failed = computed(() => !!safety.value?.last_error && safety.value?.last_error_tool === props.tool.number)
+// Dock never taught (blank, 0/0/0 or -1/-1/-1): Find dock is the only next step
+const noDock = computed(() => dockUnset(t.value.park))
 const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.value.offset.z)
 </script>
 
@@ -81,6 +83,10 @@ const offsetsZero = computed(() => !t.value.offset.x && !t.value.offset.y && !t.
     </div>
     <footer v-if="mode !== 'normal'" class="row foot">
       <button v-if="mode === 'disabled'" class="primary" :disabled="isPrinting" @click="$emit('enable')">Enable {{ t.label }}</button>
+      <button @click="$emit('edit')">Edit</button>
+    </footer>
+    <footer v-else-if="noDock" class="row foot">
+      <button class="primary" title="Its dock position was never taught: find it first" @click="$emit('dock')">Find dock</button>
       <button @click="$emit('edit')">Edit</button>
     </footer>
     <footer v-else class="row foot">
