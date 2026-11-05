@@ -911,8 +911,13 @@ class ToolchangerUI:
             run("G0 Z%.3f F1200" % (travel,))
             return z
 
-        run("SAVE_GCODE_STATE NAME=_tc_rehome_z\nG90\nG0 Z%.3f F1200"
-            % (travel,))
+        # Pull to the middle of the machine first, Y before X: after a failed
+        # change the toolhead is usually in front of the docks, and nothing
+        # goes down until it is well clear of them
+        cx = (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.
+        cy = (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.
+        run("SAVE_GCODE_STATE NAME=_tc_rehome_z\nG90\nG0 Z%.3f F1200\n"
+            "G0 Y%.3f F6000\nG0 X%.3f F6000" % (travel, cy, cx))
         try:
             shift = rehome_shift(z_off, bed_z(*points[0]), probe_at(points[0]))
             toolhead.wait_moves()
