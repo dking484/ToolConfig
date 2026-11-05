@@ -21,7 +21,7 @@
 #    [tool_probe_endstop] z_offset nothing reads (save_babysteps_to_tool).
 #  - Z after a failed tool change or a crash: TC_Z_SUSPECT marks Z as not
 #    trustworthy (a stalled gantry loses steps), RESUME refuses until
-#    TC_REHOME_Z has re-set Z by probing two spots clear of the print with
+#    TC_REHOME_Z has re-set Z by probing the bed centre with
 #    the tool on the gantry, or Z is homed again.
 #  - After any G-code error klipper-toolchanger forgets its tool; the tool
 #    on the gantry is selected again (no motion), and the error is kept in
@@ -49,10 +49,10 @@ AUTO_SELECT_SETTLE = 1.5
 Z_MEASURE_SPREAD = 0.02
 # TC_CHECK_Z: Z zeros of two tools further apart than this need re-measuring
 Z_CHECK_LIMIT = 0.02
-# TC_REHOME_Z: probe spots stay this far from the print's outline (mm), and
-# the second spot may disagree with the first by this much
+# TC_REHOME_Z: the probe spot stays this far from the print's outline (mm),
+# and probing it again after the correction may be off by this much
 REHOME_MARGIN = 15.
-REHOME_TOLERANCE = 0.1
+REHOME_TOLERANCE = 0.05
 
 
 def _probe_tool_number(probe):
@@ -93,31 +93,14 @@ def babystep_changes(delta, active, ref, probe_z, active_gcode_z):
     return {active: {'gcode_z': round(active_gcode_z + delta, 3)}}
 
 
-def rehome_points(candidates, outlines, margin, in_mesh=None):
-    """Two probe spots for TC_REHOME_Z, as far apart as possible.
-
-    candidates: (x, y) spots to choose from; outlines: the print's objects
-    as lists of (x, y). A spot must be `margin` outside every object's
-    bounding box. Spots inside the bed mesh (in_mesh(x, y)) are preferred:
-    the mesh says how high the bed is there. Returns 0 to 2 spots."""
-    boxes = [(min(p[0] for p in o), min(p[1] for p in o),
-              max(p[0] for p in o), max(p[1] for p in o))
-             for o in outlines if o]
-    clear = []
-    for x, y in candidates:
-        p = (float(x), float(y))
-        if p not in clear and all(
-                p[0] < x0 - margin or p[0] > x1 + margin
-                or p[1] < y0 - margin or p[1] > y1 + margin
-                for x0, y0, x1, y1 in boxes):
-            clear.append(p)
-    inside = [p for p in clear if in_mesh is None or in_mesh(*p)]
-    pool = inside if len(inside) >= 2 else clear
-    if len(pool) < 2:
-        return pool
-    pairs = [(a, b) for i, a in enumerate(pool) for b in pool[i + 1:]]
-    return list(max(pairs, key=lambda ab: (ab[0][0] - ab[1][0]) ** 2
-                    + (ab[0][1] - ab[1][1]) ** 2))
+def under_print(x, y, outlines, margin):
+    """Is (x, y) within `margin` of the bounding box of any of the print's
+    objects (lists of (x, y))? Probing there would land on the part."""
+    for o in outlines:
+        if o and (min(p[0] for p in o) - margin <= x <= max(p[0] for p in o) + margin
+                  and min(p[1] for p in o) - margin <= y <= max(p[1] for p in o) + margin):
+            return True
+    return False
 
 
 def rehome_shift(probe_z_offset, bed_z, trigger):
@@ -835,36 +818,24 @@ class ToolchangerUI:
         return zm.calc_z, (lambda x, y: p['min_x'] <= x <= p['max_x']
                            and p['min_y'] <= y <= p['max_y'])
 
-    def _rehome_points(self, gcmd, th, in_mesh):
-        if gcmd.get_float('X', None) is not None:
-            pts = [(gcmd.get_float('X'), gcmd.get_float('Y'))]
-            if gcmd.get_float('X2', None) is not None:
-                pts.append((gcmd.get_float('X2'), gcmd.get_float('Y2')))
-            return pts
-        now = self.reactor.monotonic()
-        settings = self.printer.lookup_object('configfile').get_status(
-            now)['settings']
-        lo, hi = th['axis_minimum'], th['axis_maximum']
-        cands = [tuple(p) for p in
-                 settings.get('quad_gantry_level', {}).get('points', [])]
-        mesh = settings.get('bed_mesh', {})
-        if 'mesh_min' in mesh and 'mesh_max' in mesh:
-            (x0, y0), (x1, y1) = mesh['mesh_min'], mesh['mesh_max']
-            cands += [(x0, y0), (x0, y1), (x1, y1), (x1, y0)]
-        cands = [p for p in cands
-                 if lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1]]
-        eo = self.printer.lookup_object('exclude_object', None)
-        objects = eo.get_status(now).get('objects', []) if eo else []
-        outlines = [o.get('polygon') or [] for o in objects]
-        if not objects and self._is_printing(now):
-            gcmd.respond_info("The print's outline is unknown (label objects"
-                              " in the slicer): probing the bed corners")
-        return rehome_points(cands, outlines, REHOME_MARGIN, in_mesh)
+    def _dock_safe_y(self, now):
+        """Y the toolhead must stay at or behind to be clear of the docks: the
+        largest safe Y of the toolchanger and of any tool."""
+        tc = self.toolchanger
+        ys = [tc.get_status(now).get('params_safe_y')] + [
+            t.get_status(now).get('params_safe_y') for t in self._tools()]
+        ys = [float(y) for y in ys if isinstance(y, (int, float))]
+        if ys:
+            return max(ys)
+        # No safe Y configured: well behind the deepest dock position
+        parks = [t.get_status(now).get('params_park_y') for t in self._tools()]
+        parks = [float(y) for y in parks if isinstance(y, (int, float))]
+        return (max(parks) if parks else 0.) + 50.
 
     cmd_TC_REHOME_Z_help = (
-        "Re-set Z with the tool on the gantry by probing two spots clear of"
-        " the print (after a failed tool change or a crash)"
-        " [X= Y= X2= Y2=] [CLEARANCE=10]")
+        "Re-set Z with the tool on the gantry by probing the bed centre, like"
+        " the other Z tests (after a failed tool change or a crash)"
+        " [X= Y=] [CLEARANCE=10]")
     def cmd_TC_REHOME_Z(self, gcmd):
         tc = self.toolchanger
         toolhead = self.printer.lookup_object('toolhead')
@@ -890,45 +861,56 @@ class ToolchangerUI:
                 "T%d's probe z_offset was never measured (it is 0), so it"
                 " can't set Z: measure it on the Z offsets tab, or put a"
                 " measured tool on the gantry" % (n,))
-        bed_z, in_mesh = self._bed_mesh()
-        points = self._rehome_points(gcmd, th, in_mesh)
-        if len(points) < 2:
-            raise gcmd.error("No two probe spots clear of the print were found;"
-                             " give them with X= Y= X2= Y2=")
+        bed_z, _ = self._bed_mesh()
+        # The dead centre of the bed, like the other Z tests. The toolhead
+        # never goes in front of the docks' safe Y.
+        min_y = self._dock_safe_y(now)
+        x = gcmd.get_float('X', (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.)
+        y = gcmd.get_float('Y', (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.)
+        if y < min_y:
+            raise gcmd.error("Y%.0f is in the dock area: probe at Y%.0f (the"
+                             " docks' safe Y) or further back" % (y, min_y))
+        eo = self.printer.lookup_object('exclude_object', None)
+        objects = eo.get_status(now).get('objects', []) if eo else []
+        if self._is_printing(now) and under_print(
+                x, y, [o.get('polygon') or [] for o in objects], REHOME_MARGIN):
+            raise gcmd.error(
+                "The print covers X%.0f Y%.0f, so probing there would land on"
+                " the part. Cancel the print, or give a clear spot with X= Y="
+                % (x, y))
         clearance = gcmd.get_float('CLEARANCE', 10., minval=3.)
         heater = toolhead.get_extruder().get_name()
         temp = self._heater_target(heater, now)
         gcode_move = self.printer.lookup_object('gcode_move')
         start = gcode_move.get_status(now)['gcode_position']
         # Travel above wherever the toolhead is now (a pause parks it above
-        # the print); only go down to probe, at spots clear of it
+        # the print); only go down at the probe spot
         travel = max(start[2], clearance)
 
-        def probe_at(p):
-            run("G0 X%.3f Y%.3f F12000\nG0 Z%.3f F1200\nPROBE"
-                % (p[0], p[1], clearance))
+        def probe():
+            run("G0 Z%.3f F1200\nPROBE" % (clearance,))
             z = probe_obj.get_status(self.reactor.monotonic())['last_z_result']
             run("G0 Z%.3f F1200" % (travel,))
             return z
 
-        # Pull to the middle of the machine first, Y before X: after a failed
-        # change the toolhead is usually in front of the docks, and nothing
-        # goes down until it is well clear of them
-        cx = (th['axis_minimum'][0] + th['axis_maximum'][0]) / 2.
-        cy = (th['axis_minimum'][1] + th['axis_maximum'][1]) / 2.
-        run("SAVE_GCODE_STATE NAME=_tc_rehome_z\nG90\nG0 Z%.3f F1200\n"
-            "G0 Y%.3f F6000\nG0 X%.3f F6000" % (travel, cy, cx))
+        # Pull straight back from the docks first (Y only, at the current
+        # height, the way a dropoff leaves), then across, and only above the
+        # probe spot change height
+        run("SAVE_GCODE_STATE NAME=_tc_rehome_z\nG90\n"
+            "G0 Y%.3f F6000\nG0 X%.3f F6000\nG0 Z%.3f F1200"
+            % (max(y, min_y), x, travel))
         try:
-            shift = rehome_shift(z_off, bed_z(*points[0]), probe_at(points[0]))
+            shift = rehome_shift(z_off, bed_z(x, y), probe())
             toolhead.wait_moves()
             pos = toolhead.get_position()
             pos[2] += shift
             toolhead.set_position(pos)
             gcode_move.reset_last_position()
-            check = probe_at(points[1]) - (z_off + bed_z(*points[1]))
-            run("G0 X%.3f Y%.3f F12000" % (start[0], start[1]))
+            # Probe again: with Z corrected it must trigger where homing would
+            check = probe() - (z_off + bed_z(x, y))
         finally:
             run("RESTORE_GCODE_STATE NAME=_tc_rehome_z MOVE=0")
+        points = [(x, y)]
         self.z_rehome = {'tool': n, 'shift': shift, 'check': round(check, 4),
                          'points': points, 'time': time.time()}
         if self._is_printing(self.reactor.monotonic()) and temp and \
@@ -938,21 +920,20 @@ class ToolchangerUI:
             run("SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f\n"
                 "TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f"
                 % (heater, temp, heater, temp - 2.))
-        where = "X%.0f Y%.0f" % points[0]
-        there = "X%.0f Y%.0f" % points[1]
+        where = "X%.0f Y%.0f" % (x, y)
         if abs(check) > REHOME_TOLERANCE:
             self.z_suspect = (
-                "Z was re-set with T%d at %s, but %s disagrees by %+.2f mm:"
-                " the gantry may be out of level" % (n, where, there, check))
+                "Z was re-set with T%d at %s, but probing again there is off"
+                " by %+.2f mm: the probe isn't repeating" % (n, where, check))
             raise gcmd.error(
-                "%s. Don't resume: cancel the print, or level the gantry"
-                " (QGL) and home again." % (self.z_suspect,))
+                "%s. Don't resume: check the tool is seated, then home again."
+                % (self.z_suspect,))
         self.z_suspect = ''
         gcmd.respond_info(
-            "Z re-set with T%d: corrected by %+.3f mm (negative: the nozzle"
-            " was closer to the bed than Z said), probed at %s; the check at"
-            " %s agrees within %.3f mm.%s" % (
-                n, shift, where, there, abs(check),
+            "Z re-set with T%d at %s: corrected by %+.3f mm (negative: the"
+            " nozzle was closer to the bed than Z said); probing again agrees"
+            " within %.3f mm.%s" % (
+                n, where, shift, abs(check),
                 " You can resume." if self._is_printing(
                     self.reactor.monotonic()) else ""))
 

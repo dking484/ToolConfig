@@ -59,7 +59,7 @@ async function rehomeZ() {
   const n = toolOn.value
   if (
     !confirm(
-      `Re-set Z with T${n}?\n\nThe toolhead travels at its current height, then probes two spots clear of the print (heating T${n} to probe temperature) and corrects Z. Make sure T${n} is properly seated on the gantry.`,
+      `Re-set Z with T${n}?\n\nThe toolhead pulls straight back from the docks, moves to the centre of the bed at its current height, then probes there twice (heating T${n} to probe temperature) and corrects Z. Make sure T${n} is properly seated on the gantry.`,
     )
   )
     return
@@ -88,7 +88,7 @@ async function dismiss() {
     <p class="msg">{{ zSuspect }}.</p>
     <p class="muted hint">
       A stalled gantry loses Z steps while the printer still counts as homed, so the nozzle can end up in the bed.
-      <template v-if="paused">Resume is blocked until Z is re-set: with the tool on the gantry, ToolConfig probes two spots clear of the print and corrects Z.</template>
+      <template v-if="paused">Resume is blocked until Z is re-set: with the tool on the gantry, ToolConfig probes the centre of the bed and corrects Z.</template>
       <template v-else>Home again before printing or teaching docks.</template>
     </p>
     <div class="row actions">

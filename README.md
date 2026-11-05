@@ -70,10 +70,12 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
   in its dock can stall the gantry so the Z motors skip, while the printer
   still counts as homed; printing on then pushes the nozzle into the bed.
   `RESUME` refuses until Z is homed again or `TC_REHOME_Z` has re-set it:
-  with the tool on the gantry it probes a spot clear of the print (outside
-  every labelled object), corrects Z using that tool's probe `z_offset` and
-  the bed mesh, and checks a second spot (within 0.1 mm). It only works with
-  a tool whose probe `z_offset` was measured (Z offsets tab).
+  with the tool on the gantry it pulls straight back from the docks, moves
+  to the dead centre of the bed (like the other Z tests), probes, corrects Z
+  using that tool's probe `z_offset` and the bed mesh, and probes again to
+  confirm (within 0.05 mm). It never moves in front of the docks' safe Y,
+  and refuses during a print if a labelled object covers the centre. It only
+  works with a tool whose probe `z_offset` was measured (Z offsets tab).
 - After any G-code error klipper-toolchanger forgets which tool is on (it
   shows as "not initialized"). The tool on the gantry is now selected again
   automatically (no motion, not during prints), and the page shows the error
@@ -92,7 +94,7 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 | `TC_MEASURE_Z [TOOLS=0,1] [REF=0] [X= Y=]` | Probe one bed spot with each tool's own probe and propose its Z offsets (see below) |
 | `TC_SET_Z_OFFSET T=n [PROBE_Z=] [GCODE_Z=]` | Apply a tool's probe `z_offset` / `gcode_z_offset` now, until restart |
 | `TC_CHECK_Z T=n [X= Y=]` | Home Z with tool n, then probe with T0: shows how far apart their Z zeros are |
-| `TC_REHOME_Z [X= Y= X2= Y2=]` | Re-set Z with the tool on the gantry by probing two spots clear of the print (after a failed tool change) |
+| `TC_REHOME_Z [X= Y=]` | Re-set Z with the tool on the gantry by probing the bed centre (after a failed tool change) |
 | `TC_Z_SUSPECT MSG= [CLEAR=1]` | Mark Z as untrustworthy until it is homed or re-set (the failure handlers do this) |
 | `Z_OFFSET_APPLY_PROBE` | Mainsail's Z offset **Save**: now saves the adjustment to the tool that is on (see below) |
 

@@ -10,10 +10,8 @@ toolchanger_ui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchanger_ui)
 z_proposals = toolchanger_ui.z_proposals
 babystep_changes = toolchanger_ui.babystep_changes
-rehome_points = toolchanger_ui.rehome_points
+under_print = toolchanger_ui.under_print
 rehome_shift = toolchanger_ui.rehome_shift
-
-QGL = [(50, 25), (50, 275), (300, 275), (300, 25)]
 
 
 class ZProposals(unittest.TestCase):
@@ -66,24 +64,21 @@ class Rehome(unittest.TestCase):
     def test_shift_uses_bed_height(self):
         self.assertEqual(rehome_shift(-0.969, -0.08, -1.049), 0.)
 
-    def test_furthest_pair_without_a_print(self):
-        self.assertEqual(rehome_points(QGL, [], 15.),
-                         [(50., 25.), (300., 275.)])
+    def test_centre_under_a_print_in_the_middle(self):
+        part = [(120, 120), (230, 120), (230, 230), (120, 230)]
+        self.assertTrue(under_print(175, 175, [part], 15.))
 
-    def test_skips_spots_near_the_print(self):
-        part = [(30, 10), (200, 10), (200, 150), (30, 150)]
-        self.assertEqual(rehome_points(QGL, [part], 15.),
-                         [(50., 275.), (300., 25.)])
+    def test_centre_clear_of_a_print_in_a_corner(self):
+        part = [(30, 200), (120, 200), (120, 300), (30, 300)]
+        self.assertFalse(under_print(175, 175, [part], 15.))
 
-    def test_prefers_spots_inside_the_mesh(self):
-        in_mesh = lambda x, y: 40 <= x <= 310 and 40 <= y <= 310
-        # (50, 25) and (300, 25) lie outside the mesh
-        pts = rehome_points(QGL + [(40, 40), (310, 310)], [], 15., in_mesh)
-        self.assertEqual(pts, [(40., 40.), (310., 310.)])
+    def test_margin_counts(self):
+        part = [(30, 30), (165, 30), (165, 165), (30, 165)]
+        self.assertTrue(under_print(175, 175, [part], 15.))
+        self.assertFalse(under_print(175, 175, [part], 5.))
 
-    def test_too_few_clear_spots(self):
-        bed = [(0, 0), (350, 0), (350, 350), (0, 350)]
-        self.assertEqual(rehome_points(QGL, [bed], 15.), [])
+    def test_no_outlines(self):
+        self.assertFalse(under_print(175, 175, [[]], 15.))
 
 
 if __name__ == '__main__':
