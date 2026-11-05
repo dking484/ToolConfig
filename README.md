@@ -180,7 +180,7 @@ Easy's own macros that ToolConfig replaces (`_STOP_IF_INCORRECT_TOOL`,
 
 ## Install
 
-On the printer (as `pi`):
+On the printer, as the user Klipper runs as (often `pi`, but any user works):
 
 ```bash
 git clone https://github.com/dking484/ToolConfig.git ~/ToolConfig
@@ -193,6 +193,12 @@ Released versions are listed under
 [Releases](https://github.com/dking484/ToolConfig/releases); to install one,
 add `--branch v0.2.0` (or the version you want) to the `git clone`. Each
 release also has a zip, but use the clone if you want Mainsail updates (below).
+
+**ToolConfig shows in Mainsail's sidebar but opens a 404?** Installs from
+v0.1.0 and earlier wrote `/home/pi/ToolConfig` into the web server config, so
+any other user got a 404. Update the clone (`git pull`) and run
+`~/ToolConfig/deploy/install-on-printer.sh` again. If it then warns that
+nginx can't read the folder, run the `chmod` it suggests.
 
 With **klipper-toolchanger** (viesturz), the script prints where to add the
 include instead: put `[include toolchanger/toolchanger-safety.cfg]` in

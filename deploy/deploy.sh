@@ -26,7 +26,8 @@ if [[ $WHAT == web || $WHAT == all ]]; then
     rm -rf $REMOTE/web/dist
     sudo -u pi tar -C $REMOTE/web -xzf /tmp/dist.tgz
     chmod -R o+rX $REMOTE
-    install -m 644 /tmp/nginx-toolconfig.conf /etc/nginx/snippets/toolconfig.conf
+    sed 's#@REPO@#$REMOTE#g' /tmp/nginx-toolconfig.conf > /etc/nginx/snippets/toolconfig.conf
+    chmod 644 /etc/nginx/snippets/toolconfig.conf
     nginx -t && systemctl reload nginx"
   echo "web deployed"
 fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One-time install on the printer (run as the Klipper user, e.g. pi, from a
-# clone of this repo at ~/ToolConfig). Idempotent.
+# One-time install on the printer (run as the user Klipper runs as, e.g. pi,
+# from a clone of this repo, usually ~/ToolConfig). Idempotent; run it again
+# to fix an install made with an older version.
 #
 #  - links the Klipper helper module into klippy/extras
 #  - links toolchanger-safety.cfg into the toolchanger config folder
@@ -37,7 +38,10 @@ mkdir -p "$CONFIG/.theme"
 [[ -f "$CONFIG/.theme/navi.json" ]] || cp "$REPO/deploy/navi.json" "$CONFIG/.theme/navi.json"
 
 chmod -R o+rX "$REPO"
-sudo install -m 644 "$REPO/deploy/nginx-toolconfig.conf" /etc/nginx/snippets/toolconfig.conf
+# The snippet names the folder nginx serves the page from: this clone,
+# wherever it is (any user, any home)
+sed "s#@REPO@#$REPO#g" "$REPO/deploy/nginx-toolconfig.conf" | sudo tee /etc/nginx/snippets/toolconfig.conf >/dev/null
+sudo chmod 644 /etc/nginx/snippets/toolconfig.conf
 # Installs from before the rename (klipper-toolchanger-ui) include the old snippet
 if sudo grep -q 'snippets/toolchanger-ui.conf' "$NGINX_SITE"; then
   sudo sed -i 's#snippets/toolchanger-ui.conf#snippets/toolconfig.conf#' "$NGINX_SITE"
@@ -48,6 +52,15 @@ if ! sudo grep -q toolconfig.conf "$NGINX_SITE"; then
   sudo sed -i '0,/^    location \/websocket {/s##    include snippets/toolconfig.conf;\n\n    location /websocket {#' "$NGINX_SITE"
 fi
 sudo nginx -t && sudo systemctl reload nginx
+
+# nginx runs as its own user and must be able to read the page. A home
+# folder closed to other users (chmod 700/750) gives a 404 at /toolconfig/.
+NGINX_USER=$(ps -o user= -C nginx 2>/dev/null | grep -v root | head -n1)
+NGINX_USER=${NGINX_USER:-www-data}
+if ! sudo -u "$NGINX_USER" test -r "$REPO/web/dist/index.html"; then
+  echo "WARNING: nginx ($NGINX_USER) can't read $REPO/web/dist, so /toolconfig/ will show 404."
+  echo "  Let it through the folders above the clone, e.g.:  chmod o+x $(dirname "$REPO")"
+fi
 
 [[ -z "$INCLUDE_NOTE" ]] || echo "$INCLUDE_NOTE"
 echo "Installed. Restart Klipper (sudo systemctl restart klipper) while the printer is idle."
