@@ -122,6 +122,13 @@ mr.on('klippy', async (k) => {
   if (k === 'ready') await init()
 })
 
+// Tool status fields that can be missing at first and set later (SET_TOOL_PARAMETER)
+const TOOL_FIELDS = [
+  'params_park_x', 'params_park_y', 'params_park_z', 'params_safe_y', 'params_close_y',
+  'gcode_x_offset', 'gcode_y_offset', 'gcode_z_offset', 'params_path_speed',
+  'params_input_shaper_type_x', 'params_input_shaper_freq_x', 'params_input_shaper_type_y', 'params_input_shaper_freq_y',
+]
+
 async function init() {
   try {
     const info = await mr.call('printer.info')
@@ -144,6 +151,15 @@ async function init() {
         want[o] = null
     }
     want.configfile = ['settings', 'save_config_pending', 'warnings']
+    // Klipper fixes an all-fields subscription to the fields an object has
+    // right now. A tool without a dock position in its file has no
+    // params_park_* yet, so a dock recorded later would never reach the page:
+    // name the fields explicitly, plus the ones that can appear later.
+    const toolObjs = Object.keys(want).filter((o) => o.startsWith('tool '))
+    if (toolObjs.length) {
+      const now = (await mr.call('printer.objects.query', { objects: Object.fromEntries(toolObjs.map((o) => [o, null])) })).status
+      for (const o of toolObjs) want[o] = [...new Set([...Object.keys(now[o] ?? {}), ...TOOL_FIELDS])]
+    }
     await mr.subscribe(want)
     const hist = await mr.call('server.gcode_store', { count: 100 })
     state.log = hist.gcode_store.map((g: any) => ({
